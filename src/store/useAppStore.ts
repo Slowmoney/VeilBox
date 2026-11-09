@@ -1,6 +1,7 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart';
 import { create } from 'zustand';
+import { isSubscriptionRefreshDue } from '../lib/format';
 import { backend } from '../lib/tauri';
 import type {
   AboutInfo,
@@ -33,6 +34,7 @@ interface AppStore {
   initialize: () => Promise<void>;
   refreshProfiles: () => Promise<void>;
   refreshSubscriptions: () => Promise<void>;
+  autoRefreshDueSubscriptions: () => Promise<void>;
   refreshConnectionStatus: () => Promise<void>;
   refreshLogs: (mode: 'preview' | 'full') => Promise<void>;
   refreshLatencies: () => Promise<void>;
@@ -440,6 +442,27 @@ export const useAppStore = create<AppStore>((set, get) => ({
         tone: 'error',
       });
     }
+  },
+
+  autoRefreshDueSubscriptions: async () => {
+    // Syncing a subscription recreates its profiles; never do it under an active
+    // connection — the connected profile would disappear from under it.
+    if (get().connectionStatus.state !== 'disconnected') {
+      return;
+    }
+    const due = get().subscriptions.filter((subscription) => isSubscriptionRefreshDue(subscription));
+    if (due.length === 0) {
+      return;
+    }
+    for (const subscription of due) {
+      try {
+        await backend.refreshSubscription(subscription.id);
+      } catch {
+        // Silent: the next tick retries; manual refresh shows the error.
+      }
+    }
+    await get().refreshProfiles();
+    await get().refreshSubscriptions();
   },
 
   refreshSubscription: async (subscriptionId) => {

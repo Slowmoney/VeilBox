@@ -45,6 +45,8 @@ const dictionary: Dict = {
   subscriptionRefresh: { ru: '\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c', en: 'Refresh' },
   subscriptionDelete: { ru: '\u0423\u0434\u0430\u043b\u0438\u0442\u044c', en: 'Delete' },
   subscriptionProfilesCount: { ru: '\u043a\u043e\u043d\u0444\u0438\u0433\u043e\u0432', en: 'profiles' },
+  subscriptionExpiresAt: { ru: '\u0434\u043e', en: 'until' },
+  subscriptionExpired: { ru: '\u0438\u0441\u0442\u0435\u043a\u043b\u0430', en: 'expired' },
   subscriptionUpdatedAt: { ru: '\u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u043e', en: 'updated' },
   subscriptionsUpdateAll: { ru: '\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0432\u0441\u0435', en: 'Update all' },
   subscriptionsUpdating: { ru: '\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435...', en: 'Updating...' },

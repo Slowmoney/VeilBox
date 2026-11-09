@@ -46,9 +46,16 @@ function AppContent() {
       void refreshLatencies();
     }, 15000);
 
+    // Subscriptions with a `profile-update-interval` header refresh themselves.
+    void useAppStore.getState().autoRefreshDueSubscriptions();
+    const subscriptionTimer = window.setInterval(() => {
+      void useAppStore.getState().autoRefreshDueSubscriptions();
+    }, 10 * 60 * 1000);
+
     return () => {
       window.clearInterval(statusTimer);
       window.clearInterval(latencyTimer);
+      window.clearInterval(subscriptionTimer);
     };
   }, [initialized, location.pathname, refreshConnectionStatus, refreshLatencies, refreshLogs]);
 

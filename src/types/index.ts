@@ -72,6 +72,13 @@ export interface Subscription {
   url: string;
   createdAt: string;
   updatedAt: string;
+  /** `subscription-userinfo` header, bytes. */
+  upload?: number | null;
+  download?: number | null;
+  total?: number | null;
+  expireAt?: string | null;
+  /** `profile-update-interval` header, hours. */
+  updateIntervalHours?: number | null;
 }
 
 export interface Settings {

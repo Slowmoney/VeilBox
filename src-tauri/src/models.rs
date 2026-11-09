@@ -172,6 +172,31 @@ pub struct Subscription {
     pub url: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// From the `subscription-userinfo` response header (bytes).
+    #[serde(default)]
+    pub upload: Option<u64>,
+    #[serde(default)]
+    pub download: Option<u64>,
+    #[serde(default)]
+    pub total: Option<u64>,
+    /// From `subscription-userinfo: expire=<unix seconds>`.
+    #[serde(default)]
+    pub expire_at: Option<DateTime<Utc>>,
+    /// From the `profile-update-interval` response header (hours).
+    #[serde(default)]
+    pub update_interval_hours: Option<u32>,
+}
+
+/// Subscription-level metadata from the response headers
+/// (`profile-title`, `profile-update-interval`, `subscription-userinfo`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SubscriptionMeta {
+    pub title: Option<String>,
+    pub upload: Option<u64>,
+    pub download: Option<u64>,
+    pub total: Option<u64>,
+    pub expire_at: Option<DateTime<Utc>>,
+    pub update_interval_hours: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

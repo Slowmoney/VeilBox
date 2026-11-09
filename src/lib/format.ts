@@ -1,5 +1,47 @@
 import { t } from './i18n';
-import type { AppLanguage, Profile, ProfileLatency } from '../types';
+import type { AppLanguage, Profile, ProfileLatency, Subscription } from '../types';
+
+export function formatBytes(value: number) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size >= 10 || unit === 0 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`;
+}
+
+/** Traffic and expiry from the `subscription-userinfo` header, or null when absent. */
+export function subscriptionUsageLabel(subscription: Subscription, language: AppLanguage = 'ru') {
+  const parts: string[] = [];
+  const used = (subscription.upload ?? 0) + (subscription.download ?? 0);
+  if (subscription.total) {
+    parts.push(`${formatBytes(used)} / ${formatBytes(subscription.total)}`);
+  } else if (subscription.upload != null || subscription.download != null) {
+    parts.push(formatBytes(used));
+  }
+  if (subscription.expireAt) {
+    const expire = new Date(subscription.expireAt);
+    if (!Number.isNaN(expire.getTime())) {
+      const expired = expire.getTime() <= Date.now();
+      parts.push(
+        `${t(language, expired ? 'subscriptionExpired' : 'subscriptionExpiresAt')} ${expire.toLocaleDateString()}`,
+      );
+    }
+  }
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/** Due for auto refresh by `profile-update-interval`. */
+export function isSubscriptionRefreshDue(subscription: Subscription, now = Date.now()) {
+  const hours = subscription.updateIntervalHours;
+  if (!hours || hours <= 0) {
+    return false;
+  }
+  const updatedAt = new Date(subscription.updatedAt).getTime();
+  return Number.isNaN(updatedAt) || now - updatedAt >= hours * 3_600_000;
+}
 
 export function formatTimestamp(value: string | null, language: AppLanguage = 'ru') {
   if (!value) {

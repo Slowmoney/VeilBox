@@ -6,8 +6,18 @@ use uuid::Uuid;
 
 use crate::{
     error::{AppError, AppResult},
-    models::Subscription,
+    models::{Subscription, SubscriptionMeta},
 };
+
+/// Headers are re-read on every sync: a header the server stopped sending
+/// clears the stored value.
+fn apply_meta(subscription: &mut Subscription, meta: SubscriptionMeta) {
+    subscription.upload = meta.upload;
+    subscription.download = meta.download;
+    subscription.total = meta.total;
+    subscription.expire_at = meta.expire_at;
+    subscription.update_interval_hours = meta.update_interval_hours;
+}
 
 pub struct SubscriptionStore {
     path: PathBuf,
@@ -48,7 +58,12 @@ impl SubscriptionStore {
             .cloned()
     }
 
-    pub async fn upsert_by_url(&self, url: String, name: String) -> AppResult<Subscription> {
+    pub async fn upsert_by_url(
+        &self,
+        url: String,
+        name: String,
+        meta: SubscriptionMeta,
+    ) -> AppResult<Subscription> {
         let mut subscriptions = self.subscriptions.write().await;
         let now = Utc::now();
 
@@ -58,18 +73,25 @@ impl SubscriptionStore {
         {
             existing.name = name;
             existing.updated_at = now;
+            apply_meta(existing, meta);
             let saved = existing.clone();
             self.persist(&subscriptions).await?;
             return Ok(saved);
         }
 
-        let subscription = Subscription {
+        let mut subscription = Subscription {
             id: Uuid::new_v4().to_string(),
             name,
             url,
             created_at: now,
             updated_at: now,
+            upload: None,
+            download: None,
+            total: None,
+            expire_at: None,
+            update_interval_hours: None,
         };
+        apply_meta(&mut subscription, meta);
         subscriptions.push(subscription.clone());
         self.persist(&subscriptions).await?;
         Ok(subscription)

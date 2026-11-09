@@ -3,14 +3,20 @@ use std::time::Duration;
 use std::{collections::HashSet, vec};
 
 use base64::{engine::general_purpose, Engine as _};
+use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use reqwest::header::HeaderMap;
 use serde_json::Value;
 use url::Url;
 
 use crate::{
+    amnezia_parser::parse_amnezia_config,
     error::{AppError, AppResult},
-    models::{NetworkType, ProfileEngine, ProfileInput, ProfileSource, ProxyProtocol, SecurityType},
+    models::{
+        NetworkType, ProfileEngine, ProfileInput, ProfileSource, ProxyProtocol, SecurityType,
+        SubscriptionMeta,
+    },
     proxy_uri_parser::{parse_proxy_uri, parse_shadowsocks_json},
 };
 
@@ -20,11 +26,89 @@ static URL_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"https?://[^\s"'<>`]+"#).unwrap());
 static PROXY_URI_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?i)(?:vless|ss|hy2|hysteria2)://[^\s"'<>`]+"#).unwrap());
+/// AmneziaWG in the Incy subscription format: `amneziawg://<base64url .conf>#Name`
+/// (`awg://` is an equivalent alias). See https://docs.incy.cc/en/subscription-format/
+static AWG_URI_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?i)\b(?:amneziawg|awg)://[A-Za-z0-9_\-+/=%]+(?:#[^\s"'<>`]*)?"#).unwrap()
+});
 
 pub struct ImportedSubscriptionPayload {
     pub name: String,
     pub url: String,
     pub profiles: Vec<ProfileInput>,
+    pub meta: SubscriptionMeta,
+}
+
+/// `profile-title`: plain text or `base64:<…>`; the first line is the name.
+fn parse_profile_title(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let text = match raw.strip_prefix("base64:") {
+        Some(encoded) => {
+            let compact: String = encoded.chars().filter(|char| !char.is_whitespace()).collect();
+            let bytes = general_purpose::STANDARD
+                .decode(compact.as_bytes())
+                .or_else(|_| general_purpose::STANDARD_NO_PAD.decode(compact.as_bytes()))
+                .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(compact.trim_end_matches('=').as_bytes()))
+                .ok()?;
+            String::from_utf8(bytes).ok()?
+        }
+        None => raw.to_string(),
+    };
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// `subscription-userinfo: upload=0; download=1; total=2; expire=1735689600`.
+/// `expire` > 32e9 is milliseconds; `expire=0` / `total=0` mean "not set".
+fn apply_userinfo(raw: &str, meta: &mut SubscriptionMeta) {
+    for part in raw.split(';') {
+        let Some((key, value)) = part.split_once('=') else { continue; };
+        let value = value.trim();
+        match key.trim().to_ascii_lowercase().as_str() {
+            "upload" => meta.upload = value.parse().ok(),
+            "download" => meta.download = value.parse().ok(),
+            "total" => meta.total = value.parse().ok().filter(|total: &u64| *total > 0),
+            "expire" => {
+                meta.expire_at = value
+                    .parse::<i64>()
+                    .ok()
+                    .filter(|expire| *expire > 0)
+                    .and_then(|expire| {
+                        if expire > 32_000_000_000 {
+                            DateTime::<Utc>::from_timestamp_millis(expire)
+                        } else {
+                            DateTime::<Utc>::from_timestamp(expire, 0)
+                        }
+                    })
+            }
+            _ => {}
+        }
+    }
+}
+
+fn subscription_meta_from_headers(headers: &HeaderMap) -> SubscriptionMeta {
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let mut meta = SubscriptionMeta {
+        title: header("profile-title")
+            .or_else(|| header("subscription-name"))
+            .and_then(parse_profile_title),
+        update_interval_hours: header("profile-update-interval")
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|hours| *hours > 0),
+        ..Default::default()
+    };
+    if let Some(userinfo) = header("subscription-userinfo") {
+        apply_userinfo(userinfo, &mut meta);
+    }
+    meta
 }
 
 pub async fn import_subscription_url(url: &str) -> AppResult<ImportedSubscriptionPayload> {
@@ -43,13 +127,22 @@ pub async fn import_subscription_url(url: &str) -> AppResult<ImportedSubscriptio
         .build()?;
 
     let source_label = parsed.host_str().map(|host| host.to_string());
-    let name = infer_subscription_name(&parsed);
-    let profiles = import_subscription_with_discovery(&client, parsed.clone(), source_label).await?;
+    let (profiles, meta) =
+        import_subscription_with_discovery(&client, parsed.clone(), source_label).await?;
+    // An explicit `#name` in the URL wins, then the server's profile-title.
+    let name = parsed
+        .fragment()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| meta.title.clone())
+        .unwrap_or_else(|| infer_subscription_name(&parsed));
 
     Ok(ImportedSubscriptionPayload {
         name,
         url: parsed.to_string(),
         profiles,
+        meta,
     })
 }
 
@@ -57,8 +150,10 @@ async fn import_subscription_with_discovery(
     client: &reqwest::Client,
     entrypoint: Url,
     source_label: Option<String>,
-) -> AppResult<Vec<ProfileInput>> {
+) -> AppResult<(Vec<ProfileInput>, SubscriptionMeta)> {
     const MAX_FETCHES: usize = 10;
+    // Headers of the entrypoint response only: discovered pages are not the subscription.
+    let mut meta = SubscriptionMeta::default();
     const MAX_DEPTH: usize = 2;
 
     let mut queue = vec![(entrypoint.clone(), 0usize)];
@@ -76,7 +171,10 @@ async fn import_subscription_with_discovery(
         }
 
         match fetch_subscription_body(client, &current_url).await {
-            Ok(body) => {
+            Ok((body, headers)) => {
+                if depth == 0 {
+                    meta = subscription_meta_from_headers(&headers);
+                }
                 discovered_bodies.push(body.clone());
                 let decoded = decode_subscription_body(&body);
                 if decoded != body {
@@ -103,10 +201,14 @@ async fn import_subscription_with_discovery(
         }
     }
 
-    parse_subscription_payloads(discovered_bodies, fetch_errors, source_label)
+    let profiles = parse_subscription_payloads(discovered_bodies, fetch_errors, source_label)?;
+    Ok((profiles, meta))
 }
 
-async fn fetch_subscription_body(client: &reqwest::Client, url: &Url) -> AppResult<String> {
+async fn fetch_subscription_body(
+    client: &reqwest::Client,
+    url: &Url,
+) -> AppResult<(String, HeaderMap)> {
     if let Some(host_str) = url.host_str() {
         let port = url.port_or_known_default().unwrap_or(80);
         if let Ok(addrs) = tokio::net::lookup_host((host_str, port)).await {
@@ -150,6 +252,7 @@ async fn fetch_subscription_body(client: &reqwest::Client, url: &Url) -> AppResu
             None,
         ));
     }
+    let headers = response.headers().clone();
 
     let mut body = Vec::new();
     while let Some(chunk) = response
@@ -165,7 +268,9 @@ async fn fetch_subscription_body(client: &reqwest::Client, url: &Url) -> AppResu
         }
     }
 
-    String::from_utf8(body).map_err(|_| AppError::validation("Invalid UTF-8 in subscription response"))
+    let body = String::from_utf8(body)
+        .map_err(|_| AppError::validation("Invalid UTF-8 in subscription response"))?;
+    Ok((body, headers))
 }
 
 fn parse_subscription_payloads(
@@ -194,6 +299,27 @@ fn parse_subscription_payloads(
         imported.extend(parse_xray_subscription_json(body, source_label.clone()));
     }
 
+    // AmneziaWG (Incy format): `amneziawg://` / `awg://` lines, the JSON
+    // container (handled in parse_xray_subscription_json) or a raw `.conf` body.
+    for body in &bodies {
+        for matched in AWG_URI_REGEX.find_iter(body) {
+            if let Some(mut profile) = parse_awg_link(matched.as_str()) {
+                profile.source_label = source_label.clone();
+                imported.push(profile);
+            }
+        }
+        if !contains_proxy_uri(body)
+            && serde_json::from_str::<Value>(body.trim()).is_err()
+            && looks_like_awg_conf(body)
+        {
+            if let Some(mut profile) = awg_profile_from_conf(body, None) {
+                profile.source_label = source_label.clone();
+                imported.push(profile);
+            }
+        }
+    }
+    dedupe_amnezia_profiles(&mut imported);
+
     if !imported.is_empty() {
         return Ok(imported);
     }
@@ -205,7 +331,7 @@ fn parse_subscription_payloads(
     };
     Err(AppError::new(
         "VALIDATION_ERROR",
-        "Subscription does not contain any supported VLESS, Shadowsocks or Hysteria2 entries",
+        "Subscription does not contain any supported VLESS, Shadowsocks, Hysteria2 or AmneziaWG entries",
         details,
     ))
 }
@@ -329,7 +455,87 @@ fn decode_subscription_body(raw: &str) -> String {
 }
 
 fn contains_proxy_uri(value: &str) -> bool {
-    PROXY_URI_REGEX.is_match(value)
+    PROXY_URI_REGEX.is_match(value) || AWG_URI_REGEX.is_match(value)
+}
+
+fn looks_like_awg_conf(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("[interface]") && lower.contains("[peer]")
+}
+
+/// base64 / base64url (padding optional) text that decodes to a `.conf`.
+fn decode_awg_conf(value: &str) -> Option<String> {
+    let compact: String = value.chars().filter(|char| !char.is_whitespace()).collect();
+    let engines = [
+        &general_purpose::URL_SAFE_NO_PAD,
+        &general_purpose::URL_SAFE,
+        &general_purpose::STANDARD,
+        &general_purpose::STANDARD_NO_PAD,
+    ];
+    for engine in engines {
+        if let Ok(bytes) = engine.decode(compact.as_bytes()) {
+            if let Ok(decoded) = String::from_utf8(bytes) {
+                if looks_like_awg_conf(&decoded) {
+                    return Some(decoded);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// `# Name = Germany` comment inside the `.conf` (Incy uses it as a fallback name).
+fn awg_conf_name_comment(conf: &str) -> Option<String> {
+    conf.lines().find_map(|line| {
+        let comment = line.trim().strip_prefix('#')?;
+        let (key, value) = comment.split_once('=')?;
+        if !key.trim().eq_ignore_ascii_case("name") {
+            return None;
+        }
+        Some(value.trim().to_string()).filter(|value| !value.is_empty())
+    })
+}
+
+fn awg_profile_from_conf(conf: &str, name: Option<String>) -> Option<ProfileInput> {
+    let name = name.or_else(|| awg_conf_name_comment(conf));
+    let mut profile = parse_amnezia_config(conf, name).ok()?;
+    profile.source = Some(ProfileSource::Subscription);
+    profile.remark = None;
+    Some(profile)
+}
+
+/// `amneziawg://<base64url .conf>#Name` or `awg://…` (Incy subscription format).
+fn parse_awg_link(link: &str) -> Option<ProfileInput> {
+    let link = link.trim();
+    let lower = link.to_ascii_lowercase();
+    let rest = if lower.starts_with("amneziawg://") {
+        &link["amneziawg://".len()..]
+    } else if lower.starts_with("awg://") {
+        &link["awg://".len()..]
+    } else {
+        return None;
+    };
+    let (payload, fragment) = match rest.split_once('#') {
+        Some((payload, fragment)) => (payload, Some(fragment)),
+        None => (rest, None),
+    };
+    let payload = urlencoding::decode(payload.trim_end_matches('/')).ok()?;
+    let conf = decode_awg_conf(&payload)?;
+    let name = fragment
+        .and_then(|value| urlencoding::decode(value).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    awg_profile_from_conf(&conf, name)
+}
+
+/// The same `.conf` may arrive twice (raw + decoded body, or link + container):
+/// Incy collapses identical configs into one server, so do we.
+fn dedupe_amnezia_profiles(profiles: &mut Vec<ProfileInput>) {
+    let mut seen = HashSet::<String>::new();
+    profiles.retain(|profile| match &profile.amnezia_config {
+        Some(config) => seen.insert(config.raw_config.trim().to_string()),
+        None => true,
+    });
 }
 
 fn extract_proxy_links(raw: &str) -> Vec<String> {
@@ -397,6 +603,31 @@ fn parse_xray_subscription_json(raw: &str, source_label: Option<String>) -> Vec<
 
     let mut profiles = Vec::new();
     for item in items {
+        // Incy AmneziaWG container: {"type":"amneziawg","servers":[{"name","config"}]}
+        if item
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.eq_ignore_ascii_case("amneziawg"))
+        {
+            for server in item.get("servers").and_then(Value::as_array).into_iter().flatten() {
+                let Some(config) = server.get("config").and_then(Value::as_str) else { continue; };
+                let Some(conf) = decode_awg_conf(config)
+                    .or_else(|| looks_like_awg_conf(config).then(|| config.to_string()))
+                else {
+                    continue;
+                };
+                let name = server
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+                if let Some(mut profile) = awg_profile_from_conf(&conf, name) {
+                    profile.source_label = source_label.clone();
+                    profiles.push(profile);
+                }
+            }
+            continue;
+        }
         let standalone = item.get("proxies").and_then(Value::as_array);
         if let Some(entries) = standalone {
             for entry in entries {
@@ -724,6 +955,119 @@ mod proxy_protocol_tests {
         let profiles = parse_subscription_payloads(vec![body.to_string()], vec![], None).unwrap();
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].protocol, ProxyProtocol::Shadowsocks);
+    }
+
+    const AWG_CONF: &str = "[Interface]\nPrivateKey = cPrivKeyBase64cPrivKeyBase64cPrivKeyBase6=\nAddress = 10.8.0.2/32\nDNS = 1.1.1.1\nJc = 4\nJmin = 40\nJmax = 70\nS1 = 86\nS2 = 574\nH1 = 1234567890\n\n[Peer]\nPublicKey = sPubKeyBase64sPubKeyBase64sPubKeyBase64sPu=\nAllowedIPs = 0.0.0.0/0\nEndpoint = awg-nl.example.com:47821\nPersistentKeepalive = 25\n";
+
+    fn awg_link(scheme: &str, conf: &str, name: &str) -> String {
+        format!(
+            "{}://{}#{}",
+            scheme,
+            general_purpose::URL_SAFE_NO_PAD.encode(conf),
+            urlencoding::encode(name)
+        )
+    }
+
+    #[test]
+    fn imports_incy_amneziawg_links() {
+        let body = format!(
+            "{}\n{}\n",
+            awg_link("amneziawg", AWG_CONF, "🇳🇱 NL"),
+            awg_link("awg", &AWG_CONF.replace("47821", "51820"), "Auto")
+        );
+        let profiles = parse_subscription_payloads(vec![body], vec![], Some("bot".into())).unwrap();
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].engine, ProfileEngine::Amneziawg);
+        assert_eq!(profiles[0].name, "🇳🇱 NL");
+        assert_eq!(profiles[0].server_address, "awg-nl.example.com");
+        assert_eq!(profiles[0].port, 47821);
+        assert_eq!(profiles[0].source, Some(ProfileSource::Subscription));
+        assert_eq!(profiles[0].source_label.as_deref(), Some("bot"));
+        let config = profiles[0].amnezia_config.as_ref().unwrap();
+        assert!(config.advanced_params.iter().any(|param| param.key == "jc" && param.value == "4"));
+        assert_eq!(profiles[1].name, "Auto");
+        assert_eq!(profiles[1].port, 51820);
+    }
+
+    #[test]
+    fn imports_incy_links_mixed_with_other_protocols_and_base64_wrapped() {
+        let body = format!(
+            "ss://YWVzLTI1Ni1nY206c2VjcmV0@example.com:8388#SS\n{}\n",
+            awg_link("amneziawg", AWG_CONF, "NL")
+        );
+        let encoded = general_purpose::STANDARD.encode(&body);
+        let decoded = decode_subscription_body(&encoded);
+        assert_eq!(decoded, body);
+        let profiles = parse_subscription_payloads(vec![encoded, decoded], vec![], None).unwrap();
+        assert_eq!(profiles.len(), 2);
+        assert!(profiles.iter().any(|profile| profile.protocol == ProxyProtocol::Shadowsocks));
+        assert!(profiles.iter().any(|profile| profile.engine == ProfileEngine::Amneziawg));
+    }
+
+    #[test]
+    fn imports_incy_amneziawg_json_container() {
+        let json = serde_json::json!({
+            "type": "amneziawg",
+            "version": 1,
+            "servers": [
+                {"name": "Germany", "config": general_purpose::URL_SAFE_NO_PAD.encode(AWG_CONF)},
+                {"config": general_purpose::URL_SAFE.encode(format!("# Name = Netherlands\n{}", AWG_CONF.replace("47821", "1")))},
+                {"name": "broken", "config": "not-base64!"}
+            ]
+        });
+        let profiles = parse_subscription_payloads(vec![json.to_string()], vec![], None).unwrap();
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].name, "Germany");
+        assert_eq!(profiles[1].name, "Netherlands");
+    }
+
+    #[test]
+    fn imports_raw_conf_body_and_collapses_duplicates() {
+        let body = AWG_CONF.to_string();
+        let profiles = parse_subscription_payloads(vec![body.clone(), body], vec![], None).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, "Amnezia awg-nl.example.com");
+    }
+
+    #[test]
+    fn reads_subscription_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "profile-title",
+            format!("base64:{}", general_purpose::STANDARD.encode("Polar 🐻 42\nописание"))
+                .parse()
+                .unwrap(),
+        );
+        headers.insert("profile-update-interval", "12".parse().unwrap());
+        headers.insert(
+            "subscription-userinfo",
+            "upload=10; download=20; total=1073741824; expire=1735689600".parse().unwrap(),
+        );
+        let meta = subscription_meta_from_headers(&headers);
+        assert_eq!(meta.title.as_deref(), Some("Polar 🐻 42"));
+        assert_eq!(meta.update_interval_hours, Some(12));
+        assert_eq!(meta.upload, Some(10));
+        assert_eq!(meta.download, Some(20));
+        assert_eq!(meta.total, Some(1_073_741_824));
+        assert_eq!(meta.expire_at.unwrap().timestamp(), 1_735_689_600);
+    }
+
+    #[test]
+    fn userinfo_edge_cases() {
+        let mut meta = SubscriptionMeta::default();
+        apply_userinfo("upload=0;download=0;total=0;expire=0", &mut meta);
+        assert_eq!(meta.total, None);
+        assert_eq!(meta.expire_at, None);
+        apply_userinfo("expire=1735689600000", &mut meta);
+        assert_eq!(meta.expire_at.unwrap().timestamp(), 1_735_689_600);
+        assert_eq!(parse_profile_title("  Plain Title "), Some("Plain Title".into()));
+        assert_eq!(parse_profile_title("base64:!!!"), None);
+    }
+
+    #[test]
+    fn amneziawg_scheme_is_not_matched_twice_as_awg() {
+        let link = awg_link("amneziawg", AWG_CONF, "NL");
+        assert_eq!(AWG_URI_REGEX.find_iter(&link).count(), 1);
     }
 
     #[test]

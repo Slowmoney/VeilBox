@@ -13,7 +13,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button } from '../components/Button';
 import { EmptyState } from '../components/EmptyState';
 import { Modal } from '../components/Modal';
-import { formatTimestamp } from '../lib/format';
+import { formatTimestamp, subscriptionUsageLabel } from '../lib/format';
 import { t } from '../lib/i18n';
 import { ConnectionHero } from '../features/connection/ConnectionHero';
 import { AmneziaProfileForm } from '../features/profiles/AmneziaProfileForm';
@@ -281,6 +281,11 @@ export function DashboardPage() {
                         <span className="dashboard-subscription-count">
                           {groupProfiles.length} {t(language, 'subscriptionProfilesCount')}
                         </span>
+                        {subscriptionUsageLabel(subscription, language) ? (
+                          <span className="dashboard-subscription-date">
+                            {subscriptionUsageLabel(subscription, language)}
+                          </span>
+                        ) : null}
                         <span className="dashboard-subscription-date">
                           {formatTimestamp(subscription.updatedAt, language)}
                         </span>

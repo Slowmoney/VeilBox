@@ -301,7 +301,7 @@ async fn sync_subscription(
     let imported = subscription_import::import_subscription_url(&url).await?;
     let subscription = state
         .subscription_store
-        .upsert_by_url(imported.url, imported.name)
+        .upsert_by_url(imported.url, imported.name, imported.meta)
         .await?;
     let effective_subscription_id = subscription_id.unwrap_or_else(|| subscription.id.clone());
     if effective_subscription_id != subscription.id {
