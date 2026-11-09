@@ -1,14 +1,11 @@
 use std::{
-    os::windows::process::CommandExt,
     path::PathBuf,
-    process::Command,
     time::{Duration, Instant},
 };
 
 use chrono::Utc;
 use regex::Regex;
 use tokio::net::{lookup_host, TcpStream};
-use tokio::process::Command as TokioCommand;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 
@@ -18,7 +15,6 @@ use crate::{
 };
 
 const LATENCY_TIMEOUT: Duration = Duration::from_millis(1500);
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub async fn measure_profiles(profiles: Vec<Profile>, sidecar_path: PathBuf, config_path: PathBuf) -> Vec<ProfileLatency> {
     let mut results = Vec::with_capacity(profiles.len());
@@ -147,9 +143,8 @@ async fn probe_hysteria(profile: &Profile, sidecar_path: &PathBuf, config_path: 
     let probe_path = config_path.with_file_name(format!("xray-latency-{}.json", uuid::Uuid::new_v4()));
     tokio::fs::write(&probe_path, config).await.map_err(|error| format!("Cannot write probe config: {error}"))?;
 
-    let mut command = TokioCommand::new(sidecar_path);
+    let mut command = crate::platform::tokio_command(&sidecar_path);
     command.arg("run").arg("-c").arg(&probe_path)
-        .creation_flags(CREATE_NO_WINDOW)
         .kill_on_drop(true)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -208,10 +203,16 @@ async fn measure_amnezia_profile(profile: Profile) -> ProfileLatency {
     let profile_id = profile.id.clone();
 
     let ping_result = tokio::task::spawn_blocking(move || {
-        Command::new("ping.exe")
-            .creation_flags(CREATE_NO_WINDOW)
-            .args(["-n", "1", "-w", "1500", &host])
-            .output()
+        if cfg!(target_os = "windows") {
+            crate::platform::command("ping.exe")
+                .args(["-n", "1", "-w", "1500", &host])
+                .output()
+        } else {
+            // macOS: -W is the reply wait time in milliseconds.
+            crate::platform::command("/sbin/ping")
+                .args(["-c", "1", "-W", "1500", &host])
+                .output()
+        }
     })
     .await;
 
@@ -223,7 +224,7 @@ async fn measure_amnezia_profile(profile: Profile) -> ProfileLatency {
                 latency_ms: None,
                 status: ProfileLatencyStatus::Error,
                 checked_at,
-                message: Some(format!("Failed to run ping.exe: {}", error)),
+                message: Some(format!("Failed to run ping: {}", error)),
             }
         }
         Err(error) => {

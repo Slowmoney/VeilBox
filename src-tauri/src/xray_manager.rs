@@ -1,8 +1,7 @@
 use std::{
     io::{BufRead, BufReader, Read},
     net::{SocketAddr, TcpStream},
-    os::windows::process::CommandExt,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -20,15 +19,94 @@ use crate::{
     elevation_manager,
     error::{AppError, AppResult},
     models::{ConnectionMode, ConnectionState, ConnectionStatusPayload, LogLevel, LogSource, Profile, ProfileEngine, TestConnectionResult},
-    proxy_manager_windows,
+    proxy_manager,
     speed_balancer,
     state::{AppState, ManagedSession},
     tun_route_manager,
 };
 
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 const XRAY_START_TIMEOUT_MS: u64 = 15_000;
+const MACOS_ADMIN_START_TIMEOUT_MS: u64 = 120_000;
 const DISCONNECT_TIMEOUT_MS: u64 = 4_000;
+#[cfg(target_os = "macos")]
+const MACOS_TUN_NAME: &str = "utun225";
+
+fn spawn_xray_child(state: &AppState) -> AppResult<std::process::Child> {
+    let mut command = crate::platform::command(&state.paths.sidecar_path);
+    if let Some(sidecar_dir) = state.paths.sidecar_path.parent() {
+        command.current_dir(sidecar_dir);
+    }
+    command
+        .arg("run")
+        .arg("-c")
+        .arg(&state.paths.temp_config_file)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+        .spawn()
+        .map_err(|error| AppError::process("Failed to launch Xray", Some(error.to_string())))
+}
+
+/// macOS TUN: Xray must run as root. A root wrapper (one administrator
+/// prompt) keeps Xray alive while a user-owned control file exists and the
+/// app is running; deleting the file stops it without a second prompt.
+#[cfg(target_os = "macos")]
+mod macos_tun {
+    use std::{path::PathBuf, sync::Mutex};
+
+    use crate::{
+        error::AppResult,
+        platform::macos::{self, shell_quote},
+        state::AppState,
+    };
+
+    static RUN_FILE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+    pub fn spawn(state: &AppState) -> AppResult<std::process::Child> {
+        let runtime_dir = state
+            .paths
+            .temp_config_file
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let run_file = runtime_dir.join("xray-tun.run");
+        let log_file = runtime_dir.join("xray-tun.log");
+        let script_path = runtime_dir.join("xray-tun.sh");
+        std::fs::write(&run_file, b"")?;
+        let sidecar_dir = state
+            .paths
+            .sidecar_path
+            .parent()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|| "/".to_string());
+        let body = format!(
+            r#"RUN={run}; APP={app}
+cd {dir} || exit 1
+{xray} run -c {config} > {log} 2>&1 &
+XP=$!
+while [ -e "$RUN" ] && kill -0 "$APP" 2>/dev/null && kill -0 "$XP" 2>/dev/null; do sleep 1; done
+kill "$XP" 2>/dev/null; sleep 1; kill -9 "$XP" 2>/dev/null
+rm -f "$RUN"
+exit 0"#,
+            run = shell_quote(&run_file.to_string_lossy()),
+            app = std::process::id(),
+            dir = shell_quote(&sidecar_dir),
+            xray = shell_quote(&state.paths.sidecar_path.to_string_lossy()),
+            config = shell_quote(&state.paths.temp_config_file.to_string_lossy()),
+            log = shell_quote(&log_file.to_string_lossy()),
+        );
+        macos::write_script(&script_path, &body)?;
+        *RUN_FILE.lock().unwrap() = Some(run_file);
+        macos::spawn_admin_script(&script_path)
+    }
+
+    /// Asks the root wrapper to stop Xray (no password needed).
+    pub fn request_stop() {
+        if let Some(run_file) = RUN_FILE.lock().unwrap().take() {
+            let _ = std::fs::remove_file(run_file);
+        }
+    }
+}
 
 pub async fn connection_status(state: &AppState) -> ConnectionStatusPayload {
     state.connection.status.read().await.clone()
@@ -83,7 +161,7 @@ pub async fn cleanup_on_launch(app: &AppHandle) -> AppResult<()> {
     let state = app.state::<AppState>();
     let runtime_snapshot = state.runtime_state.snapshot().await;
     let settings_snapshot = state.settings_store.get().await;
-    let cleaned = proxy_manager_windows::best_effort_cleanup(
+    let cleaned = proxy_manager::best_effort_cleanup(
         runtime_snapshot.last_proxy_string.clone(),
         runtime_snapshot.last_winhttp_dump.clone(),
         &state.paths.proxy_pac_file,
@@ -137,9 +215,8 @@ pub async fn xray_version(app: &AppHandle) -> Option<String> {
     }
 
     tokio::task::spawn_blocking(move || {
-        let output = Command::new(&sidecar)
+        let output = crate::platform::command(&sidecar)
             .arg("version")
-            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .ok()?;
 
@@ -257,6 +334,11 @@ async fn run_xray(
     }
     if tun_mode {
         ensure_tun_prerequisites(state)?;
+        // macOS TUN devices must be named utunN.
+        #[cfg(target_os = "macos")]
+        {
+            settings.tun_interface_name = MACOS_TUN_NAME.to_string();
+        }
         if settings.tun_outbound_interface.is_none() {
             let primary_route =
                 tun_route_manager::discover_primary_ipv4_route(Some(&settings.tun_interface_name))?;
@@ -289,21 +371,16 @@ async fn run_xray(
         .collect();
     tokio::fs::write(&state.paths.temp_config_file, config).await?;
 
-    let mut command = Command::new(&state.paths.sidecar_path);
-    if let Some(sidecar_dir) = state.paths.sidecar_path.parent() {
-        command.current_dir(sidecar_dir);
-    }
-    command
-        .arg("run")
-        .arg("-c")
-        .arg(&state.paths.temp_config_file)
-        .creation_flags(CREATE_NO_WINDOW)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = command
-        .spawn()
-        .map_err(|error| AppError::process("Failed to launch xray.exe", Some(error.to_string())))?;
+    #[cfg(target_os = "macos")]
+    let mut child = if tun_mode {
+        // TUN needs root on macOS: Xray runs under an administrator-authorized
+        // wrapper; the returned child is that wrapper (see macos_tun).
+        macos_tun::spawn(state)?
+    } else {
+        spawn_xray_child(state)?
+    };
+    #[cfg(not(target_os = "macos"))]
+    let mut child = spawn_xray_child(state)?;
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -323,8 +400,14 @@ async fn run_xray(
     } else {
         "local proxy port"
     };
+    // On macOS TUN start includes the user typing the administrator password.
+    let start_timeout_ms = if cfg!(target_os = "macos") && tun_mode {
+        MACOS_ADMIN_START_TIMEOUT_MS
+    } else {
+        XRAY_START_TIMEOUT_MS
+    };
     if let Err(error) =
-        wait_for_local_port(&child, readiness_port, XRAY_START_TIMEOUT_MS, readiness_label).await
+        wait_for_local_port(&child, readiness_port, start_timeout_ms, readiness_label).await
     {
         terminate_child(&child).await;
         return Err(error);
@@ -332,11 +415,11 @@ async fn run_xray(
     let previous_winhttp_dump = if tun_mode {
         None
     } else {
-        proxy_manager_windows::capture_winhttp_dump().ok()
+        proxy_manager::capture_winhttp_dump().ok()
     };
 
     if !tun_mode {
-        let previous = proxy_manager_windows::get_proxy_state()?;
+        let previous = proxy_manager::get_proxy_state()?;
         if let Err(error) = state.runtime_state.stage_proxy(http_port, previous, previous_winhttp_dump.clone()).await {
             terminate_child(&child).await;
             return Err(error);
@@ -344,19 +427,19 @@ async fn run_xray(
     }
 
     if tun_mode {
-        let _ = proxy_manager_windows::clear_owned_proxy(None, &state.paths.proxy_pac_file);
+        let _ = proxy_manager::clear_owned_proxy(None, &state.paths.proxy_pac_file);
         // Xray owns the TUN routes and removes them when the core stops.
     } else {
         if let Err(error) =
-            proxy_manager_windows::set_proxy(http_port, &settings, &state.paths.proxy_pac_file)
+            proxy_manager::set_proxy(http_port, &settings, &state.paths.proxy_pac_file)
         {
             let snapshot = state.runtime_state.snapshot().await;
-            let _ = proxy_manager_windows::restore_owned_proxy(Some(http_port), &state.paths.proxy_pac_file, snapshot.previous_system_proxy.as_ref());
+            let _ = proxy_manager::restore_owned_proxy(Some(http_port), &state.paths.proxy_pac_file, snapshot.previous_system_proxy.as_ref());
             terminate_child(&child).await;
             return Err(error);
         }
         if previous_winhttp_dump.is_some() {
-          if let Err(error) = proxy_manager_windows::apply_winhttp_proxy(
+          if let Err(error) = proxy_manager::apply_winhttp_proxy(
               http_port, &settings, &state.paths.proxy_pac_file,
           ) {
             let _ = state
@@ -368,9 +451,9 @@ async fn run_xray(
                 .await;
           }
         }
-        if !proxy_manager_windows::verify_proxy(http_port).unwrap_or(false) {
+        if !proxy_manager::verify_proxy(http_port).unwrap_or(false) {
             let snapshot = state.runtime_state.snapshot().await;
-            let _ = proxy_manager_windows::restore_owned_proxy(Some(http_port), &state.paths.proxy_pac_file, snapshot.previous_system_proxy.as_ref());
+            let _ = proxy_manager::restore_owned_proxy(Some(http_port), &state.paths.proxy_pac_file, snapshot.previous_system_proxy.as_ref());
             terminate_child(&child).await;
             return Err(AppError::proxy(
                 "System proxy verification failed after enabling the proxy.",
@@ -479,7 +562,7 @@ async fn disconnect_locked(app: &AppHandle, state: &AppState) -> AppResult<Conne
     let mut proxy_error = None;
     let runtime_snapshot = state.runtime_state.snapshot().await;
 
-    if let Err(error) = proxy_manager_windows::restore_owned_proxy(
+    if let Err(error) = proxy_manager::restore_owned_proxy(
         runtime_snapshot.last_http_proxy_port,
         &state.paths.proxy_pac_file,
         runtime_snapshot.previous_system_proxy.as_ref(),
@@ -487,7 +570,7 @@ async fn disconnect_locked(app: &AppHandle, state: &AppState) -> AppResult<Conne
         proxy_error = Some(error);
     }
     {
-      if let Err(error) = proxy_manager_windows::restore_owned_winhttp(
+      if let Err(error) = proxy_manager::restore_owned_winhttp(
           runtime_snapshot.last_winhttp_dump.as_deref(), runtime_snapshot.last_http_proxy_port, &state.paths.proxy_pac_file,
       ) {
         let _ = state
@@ -598,8 +681,8 @@ fn spawn_session_monitor(
                         )
                         .await;
                     let runtime_snapshot = state.runtime_state.snapshot().await;
-                    let _ = proxy_manager_windows::restore_owned_proxy(runtime_snapshot.last_http_proxy_port, &state.paths.proxy_pac_file, runtime_snapshot.previous_system_proxy.as_ref());
-                    let _ = proxy_manager_windows::restore_owned_winhttp(
+                    let _ = proxy_manager::restore_owned_proxy(runtime_snapshot.last_http_proxy_port, &state.paths.proxy_pac_file, runtime_snapshot.previous_system_proxy.as_ref());
+                    let _ = proxy_manager::restore_owned_winhttp(
                         runtime_snapshot.last_winhttp_dump.as_deref(), runtime_snapshot.last_http_proxy_port, &state.paths.proxy_pac_file,
                     );
                     drop(operation_guard);
@@ -730,6 +813,11 @@ async fn wait_for_local_port(
 }
 
 fn ensure_tun_prerequisites(state: &AppState) -> AppResult<()> {
+    // macOS: no wintun; root comes from the administrator prompt at start.
+    if cfg!(target_os = "macos") {
+        let _ = state;
+        return Ok(());
+    }
     let sidecar_dir = state
         .paths
         .sidecar_path
@@ -767,6 +855,8 @@ async fn set_status(app: &AppHandle, state: &AppState, status: ConnectionStatusP
 }
 
 async fn terminate_child(child: &Arc<tokio::sync::Mutex<std::process::Child>>) {
+    #[cfg(target_os = "macos")]
+    macos_tun::request_stop();
     let started = std::time::Instant::now();
     loop {
         {
@@ -840,11 +930,10 @@ async fn run_connection_test(app: &AppHandle, state: &AppState, profile: &Profil
 
     if tun_mode {
         // Starting a second live TUN for a profile test would alter system routes.
-        let output = Command::new(&state.paths.sidecar_path)
+        let output = crate::platform::command(&state.paths.sidecar_path)
             .args(["run", "-test", "-c"])
             .arg(&test_config_path)
             .current_dir(state.paths.sidecar_path.parent().unwrap())
-            .creation_flags(CREATE_NO_WINDOW)
             .output();
         let _ = tokio::fs::remove_file(&test_config_path).await;
         let output = output.map_err(|error| AppError::process("Failed to validate Xray config", Some(error.to_string())))?;
@@ -854,7 +943,7 @@ async fn run_connection_test(app: &AppHandle, state: &AppState, profile: &Profil
         return Ok(());
     }
 
-    let mut command = Command::new(&state.paths.sidecar_path);
+    let mut command = crate::platform::command(&state.paths.sidecar_path);
     if let Some(sidecar_dir) = state.paths.sidecar_path.parent() {
         command.current_dir(sidecar_dir);
     }
@@ -862,7 +951,6 @@ async fn run_connection_test(app: &AppHandle, state: &AppState, profile: &Profil
         .arg("run")
         .arg("-c")
         .arg(&test_config_path)
-        .creation_flags(CREATE_NO_WINDOW)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 

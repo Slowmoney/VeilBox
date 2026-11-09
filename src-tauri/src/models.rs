@@ -459,6 +459,9 @@ pub struct PreviousSystemProxy {
     pub server: Option<String>,
     pub override_list: Option<String>,
     pub auto_config_url: Option<String>,
+    /// macOS: per-network-service proxy settings (JSON) to restore on disconnect.
+    #[serde(default)]
+    pub platform_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]

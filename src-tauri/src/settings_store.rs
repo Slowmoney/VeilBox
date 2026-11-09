@@ -117,7 +117,9 @@ fn normalize_process_entries(values: Vec<String>) -> AppResult<Vec<String>> {
         if entry.contains(['\n', '\r', '"', '*']) || entry.ends_with('/') {
             return Err(AppError::validation("Use an executable name or absolute .exe path for TUN process routing"));
         }
-        if entry.contains('/') && !(entry.len() > 3 && entry.as_bytes()[1] == b':' && entry.as_bytes()[2] == b'/') {
+        let windows_absolute = entry.len() > 3 && entry.as_bytes()[1] == b':' && entry.as_bytes()[2] == b'/';
+        let unix_absolute = cfg!(not(target_os = "windows")) && entry.starts_with('/');
+        if entry.contains('/') && !windows_absolute && !unix_absolute {
             return Err(AppError::validation("Process path must be an absolute Windows path"));
         }
         items.push(entry);

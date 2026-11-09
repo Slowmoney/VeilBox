@@ -8,7 +8,6 @@ use tauri::{AppHandle, Manager};
 
 use crate::{models::{LogLevel, LogSource}, state::AppState};
 
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 const PROBE_BYTES: usize = 131_072;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const PROBE_INTERVAL: Duration = Duration::from_secs(40);
@@ -64,7 +63,7 @@ fn preferred_candidate(metrics: &[CandidateMetric], active: Option<usize>, switc
 }
 
 async fn override_balancer(sidecar: &PathBuf, api_port: u16, balancer: &str, target: Option<&str>) -> bool {
-    let mut command = tokio::process::Command::new(sidecar);
+    let mut command = crate::platform::tokio_command(sidecar);
     command
         .arg("api")
         .arg("bo")
@@ -72,7 +71,6 @@ async fn override_balancer(sidecar: &PathBuf, api_port: u16, balancer: &str, tar
         .arg("-t=3")
         .arg("-b")
         .arg(balancer)
-        .creation_flags(CREATE_NO_WINDOW)
         .kill_on_drop(true);
     if let Some(tag) = target {
         command.arg(tag);

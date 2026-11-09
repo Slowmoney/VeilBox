@@ -79,5 +79,6 @@ pub fn relaunch_as_administrator_for_profile(profile_id: &str) -> AppResult<()> 
 }
 
 pub fn should_auto_elevate(connection_mode: &ConnectionMode, elevated: bool) -> bool {
-    matches!(connection_mode, ConnectionMode::Tun) && !elevated
+    // Windows relaunches elevated; macOS asks for the password per start instead.
+    cfg!(target_os = "windows") && matches!(connection_mode, ConnectionMode::Tun) && !elevated
 }

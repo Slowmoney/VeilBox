@@ -289,7 +289,7 @@ pub async fn get_about_info(
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         tauri_version: tauri::VERSION.to_string(),
         xray_version: connection_manager::xray_version(&app).await,
-        platform: "windows".to_string(),
+        platform: crate::platform::platform_name().to_string(),
     })
 }
 

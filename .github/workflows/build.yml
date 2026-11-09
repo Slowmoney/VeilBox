@@ -93,3 +93,101 @@ jobs:
         with:
           files: src-tauri/target/release/bundle/nsis/*.exe
           generate_release_notes: true
+
+  macos:
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            goarch: arm64
+            xray_asset: Xray-macos-arm64-v8a.zip
+          - arch: x64
+            target: x86_64-apple-darwin
+            goarch: amd64
+            xray_asset: Xray-macos-64.zip
+    env:
+      XRAY_VERSION: "v26.9.9"
+      AMNEZIAWG_GO_REF: "v3.1.20260828"
+      AMNEZIAWG_TOOLS_REF: "v3.1.20260812"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: false
+
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+
+      # --- runtime binaries for src-tauri/bin (see tauri.macos.conf.json) ---
+
+      - name: Xray + GeoIP/GeoSite (SHA-256 from the release .dgst)
+        run: |
+          set -euo pipefail
+          base="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/${{ matrix.xray_asset }}"
+          curl -fsSL -o "$RUNNER_TEMP/xray.zip" "$base"
+          curl -fsSL -o "$RUNNER_TEMP/xray.dgst" "$base.dgst"
+          want=$(grep -E '^SHA2-256=' "$RUNNER_TEMP/xray.dgst" | awk '{print $2}')
+          have=$(shasum -a 256 "$RUNNER_TEMP/xray.zip" | awk '{print $1}')
+          [ -n "$want" ] && [ "$want" = "$have" ] || { echo "xray SHA-256 mismatch: $have != $want"; exit 1; }
+          unzip -o "$RUNNER_TEMP/xray.zip" xray geoip.dat geosite.dat -d src-tauri/bin
+          chmod +x src-tauri/bin/xray
+
+      - name: amneziawg-go
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$AMNEZIAWG_GO_REF" https://github.com/amnezia-vpn/amneziawg-go "$RUNNER_TEMP/amneziawg-go"
+          cd "$RUNNER_TEMP/amneziawg-go"
+          GOOS=darwin GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 go build -trimpath -o "$GITHUB_WORKSPACE/src-tauri/bin/amneziawg-go"
+
+      - name: awg (amneziawg-tools)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$AMNEZIAWG_TOOLS_REF" https://github.com/amnezia-vpn/amneziawg-tools "$RUNNER_TEMP/amneziawg-tools"
+          arch=${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}
+          make -C "$RUNNER_TEMP/amneziawg-tools/src" CC="clang -arch $arch" PLATFORM=darwin wg
+          cp "$RUNNER_TEMP/amneziawg-tools/src/wg" src-tauri/bin/awg
+          chmod +x src-tauri/bin/awg
+          file src-tauri/bin/xray src-tauri/bin/amneziawg-go src-tauri/bin/awg
+
+      # --- checks ---
+
+      - name: Rust tests
+        if: matrix.arch == 'arm64'
+        working-directory: src-tauri
+        run: cargo test --locked --lib
+
+      # --- build ---
+
+      - name: Build app + DMG
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles app,dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VeilBox-macos-${{ matrix.arch }}-${{ github.sha }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg

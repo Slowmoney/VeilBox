@@ -1,0 +1,16 @@
+{
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "resources": [
+      "bin/xray",
+      "bin/geoip.dat",
+      "bin/geosite.dat",
+      "bin/amneziawg-go",
+      "bin/awg"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-"
+    }
+  }
+}

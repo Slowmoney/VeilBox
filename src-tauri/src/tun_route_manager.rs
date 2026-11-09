@@ -22,11 +22,21 @@ pub struct DefaultRouteInfo {
 }
 
 pub fn discover_primary_ipv4_route(exclude_alias: Option<&str>) -> AppResult<DefaultRouteInfo> {
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = exclude_alias;
+        let (interface_alias, gateway) = crate::platform::macos::default_route()?;
+        return Ok(DefaultRouteInfo {
+            interface_alias,
+            next_hop: gateway.unwrap_or_default(),
+        });
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = exclude_alias;
         return Err(AppError::process(
-            "TUN route management is only available on Windows.",
+            "TUN route management is only available on Windows and macOS.",
             None,
         ));
     }

@@ -12,7 +12,16 @@ mod network_interface_manager;
 mod profile_geo;
 mod profile_store;
 mod proxy_uri_parser;
+mod platform;
+mod proxy_rules;
+#[cfg(target_os = "windows")]
 mod proxy_manager_windows;
+#[cfg(target_os = "windows")]
+use proxy_manager_windows as proxy_manager;
+#[cfg(target_os = "macos")]
+mod proxy_manager_macos;
+#[cfg(target_os = "macos")]
+use proxy_manager_macos as proxy_manager;
 mod settings_store;
 mod speed_balancer;
 mod state;
@@ -181,8 +190,8 @@ pub fn run() {
                     tauri::async_runtime::block_on(async { state.runtime_state.snapshot().await });
                 let settings_snapshot =
                     tauri::async_runtime::block_on(async { state.settings_store.get().await });
-                let proxy_restored = proxy_manager_windows::restore_owned_proxy(runtime_snapshot.last_http_proxy_port, &state.paths.proxy_pac_file, runtime_snapshot.previous_system_proxy.as_ref()).is_ok();
-                let winhttp_restored = proxy_manager_windows::restore_owned_winhttp(
+                let proxy_restored = proxy_manager::restore_owned_proxy(runtime_snapshot.last_http_proxy_port, &state.paths.proxy_pac_file, runtime_snapshot.previous_system_proxy.as_ref()).is_ok();
+                let winhttp_restored = proxy_manager::restore_owned_winhttp(
                     runtime_snapshot.last_winhttp_dump.as_deref(), runtime_snapshot.last_http_proxy_port, &state.paths.proxy_pac_file,
                 ).is_ok();
                 if matches!(settings_snapshot.connection_mode, crate::models::ConnectionMode::Tun) {

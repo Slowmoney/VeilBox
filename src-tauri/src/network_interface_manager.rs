@@ -25,7 +25,11 @@ pub fn is_elevated() -> bool {
             .output();
         output.map(|s| s.status.success()).unwrap_or(false)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        crate::platform::macos::is_root()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         false
     }
@@ -49,10 +53,37 @@ enum NetworkInterfacePayload {
 }
 
 pub fn list_network_interfaces() -> AppResult<Vec<NetworkInterfaceInfo>> {
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        // Hardware ports (Wi-Fi, Ethernet, ...) with their BSD device names.
+        let output = crate::platform::command("/usr/sbin/networksetup")
+            .arg("-listallhardwareports")
+            .output()
+            .map_err(|error| AppError::process("Failed to list network interfaces.", Some(error.to_string())))?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut items = Vec::new();
+        let mut port: Option<String> = None;
+        for line in text.lines() {
+            if let Some(value) = line.strip_prefix("Hardware Port:") {
+                port = Some(value.trim().to_string());
+            } else if let Some(device) = line.strip_prefix("Device:") {
+                let device = device.trim().to_string();
+                if !device.is_empty() {
+                    items.push(NetworkInterfaceInfo {
+                        name: device,
+                        status: "Unknown".to_string(),
+                        description: port.take(),
+                    });
+                }
+            }
+        }
+        return Ok(items);
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         return Err(AppError::process(
-            "Network interface discovery is only available on Windows.",
+            "Network interface discovery is only available on Windows and macOS.",
             None,
         ));
     }

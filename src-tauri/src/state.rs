@@ -49,18 +49,18 @@ impl AppPaths {
 
         let workspace_sidecar_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("bin")
-            .join("xray.exe");
+            .join(crate::platform::exe("xray"));
         let workspace_amnezia_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("bin")
-            .join("amneziawg.exe");
+            .join(crate::platform::amnezia_binary());
         let resource_sidecar_path = app
             .path()
-            .resolve("bin/xray.exe", tauri::path::BaseDirectory::Resource)
+            .resolve(format!("bin/{}", crate::platform::exe("xray")), tauri::path::BaseDirectory::Resource)
             .ok()
             .filter(|path| path.exists());
         let resource_amnezia_path = app
             .path()
-            .resolve("bin/amneziawg.exe", tauri::path::BaseDirectory::Resource)
+            .resolve(format!("bin/{}", crate::platform::amnezia_binary()), tauri::path::BaseDirectory::Resource)
             .ok()
             .filter(|path| path.exists());
 
