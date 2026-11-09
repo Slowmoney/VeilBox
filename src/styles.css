@@ -1910,7 +1910,7 @@ html[data-theme='light'] .app-shell {
   font-weight: 600;
 }
 
-.dashboard-balance-button.is-active {
+.dashboard-toolbar-button.is-active {
   color: var(--primary);
 }
 

@@ -1,4 +1,5 @@
 import {
+  ArrowUpDown,
   ChevronDown,
   FileJson,
   Link2,
@@ -25,6 +26,20 @@ import { ProfileForm } from '../features/profiles/ProfileForm';
 import { ProfileListItem } from '../features/profiles/ProfileListItem';
 import { useAppStore } from '../store/useAppStore';
 import type { Profile } from '../types';
+
+type SortMode = 'none' | 'ping' | 'name';
+
+const SORT_MODES: SortMode[] = ['none', 'ping', 'name'];
+const SORT_STORAGE_KEY = 'veilbox.profileSort';
+
+function loadSortMode(): SortMode {
+  try {
+    const value = window.localStorage.getItem(SORT_STORAGE_KEY);
+    return SORT_MODES.includes(value as SortMode) ? (value as SortMode) : 'none';
+  } catch {
+    return 'none';
+  }
+}
 
 type ModalMode = 'new' | 'edit' | 'uri' | 'json' | 'subscription' | 'amnezia';
 
@@ -63,6 +78,17 @@ export function DashboardPage() {
     {},
   );
   const [search, setSearch] = useState('');
+  const [sortMode, setSortMode] = useState<SortMode>(loadSortMode);
+
+  const cycleSortMode = () => {
+    const next = SORT_MODES[(SORT_MODES.indexOf(sortMode) + 1) % SORT_MODES.length];
+    setSortMode(next);
+    try {
+      window.localStorage.setItem(SORT_STORAGE_KEY, next);
+    } catch {
+      // not persisted: the choice still applies for this session
+    }
+  };
 
   const openModal = (mode: ModalMode) => {
     setCreateMenuOpen(false);
@@ -101,7 +127,15 @@ export function DashboardPage() {
       .includes(normalizedSearch);
   };
 
+  // 'none' keeps the subscription/import order (Array.prototype.sort is stable).
   const compareProfiles = (a: Profile, b: Profile) => {
+    if (sortMode === 'none') {
+      return 0;
+    }
+    if (sortMode === 'name') {
+      return a.name.localeCompare(b.name);
+    }
+
     const aActive = a.id === selectedProfileId ? 1 : 0;
     const bActive = b.id === selectedProfileId ? 1 : 0;
     if (aActive !== bActive) {
@@ -132,7 +166,7 @@ export function DashboardPage() {
         .filter((profile) => profile.source !== 'subscription')
         .filter(matchesSearch)
         .sort(compareProfiles),
-    [profiles, latencies, profileCountries, selectedProfileId, normalizedSearch],
+    [profiles, latencies, profileCountries, selectedProfileId, normalizedSearch, sortMode],
   );
 
   const subscriptionGroups = useMemo(
@@ -146,7 +180,7 @@ export function DashboardPage() {
             .sort(compareProfiles),
         }))
         .filter((entry) => entry.profiles.length > 0 || !normalizedSearch),
-    [profiles, subscriptions, latencies, profileCountries, selectedProfileId, normalizedSearch],
+    [profiles, subscriptions, latencies, profileCountries, selectedProfileId, normalizedSearch, sortMode],
   );
 
   const hasVisibleProfiles =
@@ -230,6 +264,15 @@ export function DashboardPage() {
           >
             <Route size={18} />
             <span>{language === 'ru' ? 'Балансировка' : 'Balancing'}: {balanceServers ? 'ON' : 'OFF'}</span>
+          </button>
+          <button
+            type="button"
+            className={`dashboard-toolbar-button${sortMode !== 'none' ? ' is-active' : ''}`}
+            title={t(language, 'sortHint')}
+            onClick={cycleSortMode}
+          >
+            <ArrowUpDown size={18} />
+            <span>{t(language, sortMode === 'none' ? 'sortNone' : sortMode === 'ping' ? 'sortPing' : 'sortName')}</span>
           </button>
         </div>
 
