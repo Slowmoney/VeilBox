@@ -1,4 +1,6 @@
-use std::{env, process::Command};
+use std::env;
+#[cfg(target_os = "windows")]
+use std::process::Command;
 
 use crate::{
     error::{AppError, AppResult},
