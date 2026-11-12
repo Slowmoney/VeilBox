@@ -202,6 +202,7 @@ async fn measure_amnezia_profile(profile: Profile) -> ProfileLatency {
     let host = profile.server_address.clone();
     let profile_id = profile.id.clone();
 
+    let started = Instant::now();
     let ping_result = tokio::task::spawn_blocking(move || {
         if cfg!(target_os = "windows") {
             crate::platform::command("ping.exe")
@@ -250,12 +251,14 @@ async fn measure_amnezia_profile(profile: Profile) -> ProfileLatency {
             };
         }
 
+        // Unknown output format: the round trip of the ping process itself is
+        // still a usable (slightly pessimistic) estimate, unlike a fake 0 ms.
         return ProfileLatency {
             profile_id,
-            latency_ms: Some(0),
+            latency_ms: Some(started.elapsed().as_millis()),
             status: ProfileLatencyStatus::Ok,
             checked_at,
-            message: Some("Ping succeeded but latency could not be parsed".to_string()),
+            message: Some("Ping succeeded; latency estimated from the ping process time".to_string()),
         };
     }
 
@@ -268,10 +271,45 @@ async fn measure_amnezia_profile(profile: Profile) -> ProfileLatency {
     }
 }
 
+/// Round-trip time from `ping` output, independent of the system language and
+/// code page. Windows prints the reply as "...=32 time=12ms TTL=55" in the
+/// console code page (CP866 for Russian: "время=12мс"), which is not UTF-8, so
+/// the word before the number cannot be matched; the number right before
+/// "TTL=" can. macOS/Linux: "time=12.3 ms".
 fn parse_ping_latency(output: &str) -> Option<u128> {
-    let regex = Regex::new(r"(?i)(?:time|время)\s*[=<]?\s*(\d+)\s*(?:ms|мс|мсек)").ok()?;
-    regex
-        .captures(output)
-        .and_then(|captures| captures.get(1))
-        .and_then(|value| value.as_str().parse::<u128>().ok())
+    let patterns = [
+        // The unit right after the number ("ms", "мс", mojibake): no spaces,
+        // digits, '=' or '<' — so "bytes=32 time<1ms" cannot match on 32.
+        r"[=<](\d+(?:[.,]\d+)?)[^\s\d=<]{0,8}\s+TTL=",
+        r"(?i)time[=<]\s*(\d+(?:\.\d+)?)\s*ms",
+    ];
+    for pattern in patterns {
+        let regex = Regex::new(pattern).ok()?;
+        if let Some(value) = regex.captures(output).and_then(|captures| captures.get(1)) {
+            let number: f64 = value.as_str().replace(',', ".").parse().ok()?;
+            return Some(number.round() as u128);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod ping_tests {
+    use super::parse_ping_latency;
+
+    #[test]
+    fn parses_windows_output_in_any_language() {
+        assert_eq!(parse_ping_latency("Reply from 1.2.3.4: bytes=32 time=12ms TTL=55"), Some(12));
+        assert_eq!(parse_ping_latency("Reply from 1.2.3.4: bytes=32 time<1ms TTL=55"), Some(1));
+        // Russian Windows output read as lossy UTF-8 from CP866: the words are garbage.
+        assert_eq!(
+            parse_ping_latency("\u{fffd}\u{fffd} 1.2.3.4: \u{fffd}\u{fffd}=32 \u{fffd}\u{fffd}=47\u{fffd}\u{fffd} TTL=55"),
+            Some(47)
+        );
+    }
+
+    #[test]
+    fn parses_macos_output() {
+        assert_eq!(parse_ping_latency("64 bytes from 1.2.3.4: icmp_seq=0 ttl=55 time=23.6 ms"), Some(24));
+    }
 }

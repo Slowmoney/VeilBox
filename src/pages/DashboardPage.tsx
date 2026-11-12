@@ -136,12 +136,6 @@ export function DashboardPage() {
       return a.name.localeCompare(b.name);
     }
 
-    const aActive = a.id === selectedProfileId ? 1 : 0;
-    const bActive = b.id === selectedProfileId ? 1 : 0;
-    if (aActive !== bActive) {
-      return bActive - aActive;
-    }
-
     const aLatency = latencies[a.id];
     const bLatency = latencies[b.id];
     const aScore =

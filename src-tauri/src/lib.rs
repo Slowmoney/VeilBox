@@ -29,6 +29,7 @@ mod subscription_store;
 mod subscription_import;
 mod tun_route_manager;
 mod tray_manager;
+mod update_manager;
 mod vless_parser;
 mod xray_manager;
 
@@ -85,14 +86,16 @@ fn apply_adaptive_main_window_size(app: &AppHandle) {
     let logical_width = physical_size.width as f64 / scale_factor;
     let logical_height = physical_size.height as f64 / scale_factor;
 
-    let max_fit_width = (logical_width - 24.0).max(520.0);
+    // Portrait, phone-like window (the UI is a single column with a bottom
+    // tab bar); it still fits small laptop screens.
+    let max_fit_width = (logical_width - 24.0).max(360.0);
     let max_fit_height = (logical_height - 48.0).max(480.0);
 
-    let min_width = 775.0_f64.min(max_fit_width);
-    let min_height = 600.0_f64.min(max_fit_height);
+    let min_width = 380.0_f64.min(max_fit_width);
+    let min_height = 640.0_f64.min(max_fit_height);
 
-    let start_width = min_width;
-    let start_height = min_height;
+    let start_width = 420.0_f64.min(max_fit_width);
+    let start_height = 860.0_f64.min(max_fit_height);
 
     let _ = window.set_min_size(Some(Size::Logical(LogicalSize::new(min_width, min_height))));
     let _ = window.set_size(Size::Logical(LogicalSize::new(start_width, start_height)));
@@ -105,6 +108,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -179,7 +183,9 @@ pub fn run() {
             commands::get_profile_latencies,
             commands::get_profile_countries,
             commands::list_network_interfaces,
-            commands::get_about_info
+            commands::get_about_info,
+            commands::check_update,
+            commands::install_update
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|error| panic!("error while building tauri application: {error}"))

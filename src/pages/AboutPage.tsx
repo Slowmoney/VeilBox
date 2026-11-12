@@ -3,6 +3,10 @@ import { useAppStore } from '../store/useAppStore';
 export function AboutPage() {
   const about = useAppStore((state) => state.about);
   const language = useAppStore((state) => state.settings.language);
+  const update = useAppStore((state) => state.update);
+  const updateState = useAppStore((state) => state.updateState);
+  const checkForUpdate = useAppStore((state) => state.checkForUpdate);
+  const installUpdate = useAppStore((state) => state.installUpdate);
   const tx = (ru: string, en: string) => (language === 'ru' ? ru : en);
 
   return (
@@ -30,6 +34,23 @@ export function AboutPage() {
           <div className="about-row">
             <span>{tx('Версия приложения', 'App version')}</span>
             <strong>{about?.appVersion ?? tx('Неизвестно', 'Unknown')}</strong>
+          </div>
+          <div className="about-row">
+            <span>{update ? tx(`Доступна ${update.version}`, `${update.version} available`) : tx('Обновления', 'Updates')}</span>
+            <button
+              type="button"
+              className="about-update-button"
+              disabled={updateState !== 'idle'}
+              onClick={() => void (update ? installUpdate() : checkForUpdate(false))}
+            >
+              {updateState === 'checking'
+                ? tx('Проверяю…', 'Checking…')
+                : updateState === 'installing'
+                  ? tx('Обновляю…', 'Updating…')
+                  : update
+                    ? tx('Обновить', 'Update')
+                    : tx('Проверить', 'Check')}
+            </button>
           </div>
           <div className="about-row">
             <span>{tx('Версия Tauri', 'Tauri version')}</span>

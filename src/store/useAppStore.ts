@@ -15,6 +15,7 @@ import type {
   Subscription,
   TestConnectionResult,
   ToastMessage,
+  UpdateInfo,
 } from '../types';
 
 interface AppStore {
@@ -58,6 +59,10 @@ interface AppStore {
   clearLogs: () => Promise<void>;
   pushToast: (toast: Omit<ToastMessage, 'id'>) => void;
   dismissToast: (id: string) => void;
+  update: UpdateInfo | null;
+  updateState: 'idle' | 'checking' | 'installing';
+  checkForUpdate: (silent?: boolean) => Promise<void>;
+  installUpdate: () => Promise<void>;
 }
 
 const defaultConnection: ConnectionStatus = {
@@ -120,6 +125,42 @@ function mapError(error: unknown): BackendError {
 
 export const useAppStore = create<AppStore>((set, get) => ({
   initialized: false,
+  update: null,
+  updateState: 'idle',
+
+  checkForUpdate: async (silent = false) => {
+    if (get().updateState !== 'idle') return;
+    set({ updateState: 'checking' });
+    try {
+      const update = await backend.checkUpdate();
+      set({ update });
+      if (!silent) {
+        get().pushToast({
+          title: update ? `Доступна версия ${update.version}` : 'Обновлений нет',
+          message: update ? 'Нажмите «Обновить» вверху окна.' : 'Установлена последняя версия.',
+          tone: 'success',
+        });
+      }
+    } catch (error) {
+      if (!silent) {
+        get().pushToast({ title: 'Не удалось проверить обновления', message: mapError(error).message, tone: 'error' });
+      }
+    } finally {
+      set({ updateState: 'idle' });
+    }
+  },
+
+  installUpdate: async () => {
+    set({ updateState: 'installing' });
+    try {
+      // On success the app restarts and this promise never resolves.
+      await backend.installUpdate();
+    } catch (error) {
+      set({ updateState: 'idle' });
+      get().pushToast({ title: 'Обновление не установлено', message: mapError(error).message, tone: 'error' });
+    }
+  },
+
   loading: false,
   profiles: [],
   subscriptions: [],

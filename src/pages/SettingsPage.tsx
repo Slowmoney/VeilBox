@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
+import { Plug,
   Bot,
   Bug,
   Cable,
@@ -332,6 +332,12 @@ export function SettingsPage() {
                 icon: Route,
                 title: 'TUN',
                 hint: tx(language, 'Глубже в систему', 'System-wide capture'),
+              },
+              {
+                value: 'proxyOnly' as const,
+                icon: Plug,
+                title: tx(language, 'Только прокси', 'Proxy only'),
+                hint: tx(language, 'Не трогает систему', 'System untouched'),
               },
             ].map((mode) => (
               <button

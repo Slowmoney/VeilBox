@@ -327,3 +327,13 @@ async fn sync_subscription(
         profiles: saved,
     })
 }
+
+#[tauri::command]
+pub async fn check_update(app: AppHandle) -> Result<Option<crate::update_manager::UpdateInfo>, AppError> {
+    crate::update_manager::check(&app).await
+}
+
+#[tauri::command]
+pub async fn install_update(app: AppHandle) -> Result<(), AppError> {
+    crate::update_manager::install(&app).await
+}

@@ -324,6 +324,9 @@ async fn run_xray(
 ) -> AppResult<ConnectionStatusPayload> {
     let mut settings = state.settings_store.get().await;
     let tun_mode = matches!(settings.connection_mode, ConnectionMode::Tun);
+    // ProxyOnly: the same local HTTP/SOCKS proxy as SystemProxy, but the OS
+    // proxy settings are left untouched (apps are pointed at it manually).
+    let system_proxy = matches!(settings.connection_mode, ConnectionMode::SystemProxy);
     let mut auto_outbound_interface = None;
 
     if !state.paths.sidecar_path.exists() {
@@ -412,13 +415,13 @@ async fn run_xray(
         terminate_child(&child).await;
         return Err(error);
     }
-    let previous_winhttp_dump = if tun_mode {
+    let previous_winhttp_dump = if !system_proxy {
         None
     } else {
         proxy_manager::capture_winhttp_dump().ok()
     };
 
-    if !tun_mode {
+    if system_proxy {
         let previous = proxy_manager::get_proxy_state()?;
         if let Err(error) = state.runtime_state.stage_proxy(http_port, previous, previous_winhttp_dump.clone()).await {
             terminate_child(&child).await;
@@ -429,7 +432,7 @@ async fn run_xray(
     if tun_mode {
         let _ = proxy_manager::clear_owned_proxy(None, &state.paths.proxy_pac_file);
         // Xray owns the TUN routes and removes them when the core stops.
-    } else {
+    } else if system_proxy {
         if let Err(error) =
             proxy_manager::set_proxy(http_port, &settings, &state.paths.proxy_pac_file)
         {
@@ -480,7 +483,7 @@ async fn run_xray(
         let mut session_slot = state.connection.session.lock().await;
         *session_slot = Some(session);
     }
-    let proxy_string = if tun_mode {
+    let proxy_string = if !system_proxy {
         None
     } else {
         Some(format!("127.0.0.1:{}", http_port))
@@ -504,6 +507,8 @@ async fn run_xray(
         active_profile_id: Some(profile.id.clone()),
         message: Some(if tun_mode {
             format!("Connected via {} in TUN mode", profile.name)
+        } else if !system_proxy {
+            format!("Connected via {}: proxy only (HTTP 127.0.0.1:{http_port}, SOCKS 127.0.0.1:{socks_port})", profile.name)
         } else {
             format!("Connected via {}", profile.name)
         }),

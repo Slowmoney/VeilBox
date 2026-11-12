@@ -46,6 +46,12 @@ function AppContent() {
       void refreshLatencies();
     }, 15000);
 
+    // New version from GitHub Releases: once at start, then every 6 hours.
+    void useAppStore.getState().checkForUpdate(true);
+    const updateTimer = window.setInterval(() => {
+      void useAppStore.getState().checkForUpdate(true);
+    }, 6 * 60 * 60 * 1000);
+
     // Subscriptions with a `profile-update-interval` header refresh themselves.
     void useAppStore.getState().autoRefreshDueSubscriptions();
     const subscriptionTimer = window.setInterval(() => {
@@ -56,6 +62,7 @@ function AppContent() {
       window.clearInterval(statusTimer);
       window.clearInterval(latencyTimer);
       window.clearInterval(subscriptionTimer);
+      window.clearInterval(updateTimer);
     };
   }, [initialized, location.pathname, refreshConnectionStatus, refreshLatencies, refreshLogs]);
 

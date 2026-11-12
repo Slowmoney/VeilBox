@@ -270,6 +270,8 @@ pub struct SettingsPatch {
 pub enum ConnectionMode {
     SystemProxy,
     Tun,
+    /// Local HTTP/SOCKS proxy only; the system proxy is not changed.
+    ProxyOnly,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

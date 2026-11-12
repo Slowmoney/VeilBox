@@ -1,5 +1,9 @@
 name: Build
 
+# Push to master / PR: build and test, installers as run artifacts.
+# Tag v*: the app version comes from the tag, installers are signed for the
+# in-app updater and published to GitHub Releases together with latest.json
+# (the updater endpoint in tauri.conf.json).
 on:
   push:
     branches: [master]
@@ -14,15 +18,18 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  # Signing key for updater artifacts (repo secrets). Without it the build
+  # still works, just without updater files.
+  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
 jobs:
   windows:
     runs-on: windows-latest
     defaults:
       run:
         shell: pwsh
-    env:
-      WINTUN_VERSION: "0.14.1"
-      WINTUN_SHA256: "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51"
     steps:
       - uses: actions/checkout@v4
 
@@ -37,62 +44,33 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/set-version.mjs "${env:GITHUB_REF_NAME}"
+
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
 
-      # --- runtime binaries for src-tauri/bin (bundled as resources) ---
-
-      - name: Xray + GeoIP/GeoSite (pinned, SHA-256 verified)
-        run: ./scripts/install-xray.ps1
-
-      - name: Wintun (TUN mode)
-        run: |
-          $zip = Join-Path $env:RUNNER_TEMP "wintun.zip"
-          Invoke-WebRequest "https://www.wintun.net/builds/wintun-$env:WINTUN_VERSION.zip" -OutFile $zip
-          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -ne $env:WINTUN_SHA256) { throw "wintun SHA-256 mismatch: $hash" }
-          $out = Join-Path $env:RUNNER_TEMP "wintun"
-          Expand-Archive $zip -DestinationPath $out
-          Copy-Item (Join-Path $out "wintun/bin/amd64/wintun.dll") src-tauri/bin/wintun.dll -Force
-
-      - name: AmneziaWG (amneziawg.exe + awg.exe from the bundled MSI)
-        run: |
-          $msi = (Resolve-Path src-tauri/bin/amneziawg.msi).Path
-          $out = Join-Path $env:RUNNER_TEMP "amneziawg"
-          $p = Start-Process msiexec.exe -ArgumentList "/a `"$msi`" /qn TARGETDIR=`"$out`"" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "msiexec /a failed: $($p.ExitCode)" }
-          foreach ($name in @("amneziawg.exe", "awg.exe")) {
-            $file = Get-ChildItem $out -Recurse -Filter $name | Select-Object -First 1
-            if (-not $file) { throw "$name not found in amneziawg.msi" }
-            Copy-Item $file.FullName "src-tauri/bin/$name" -Force
-          }
-          Get-ChildItem src-tauri/bin | ForEach-Object {
-            "{0,-14} {1,12} {2}" -f $_.Name, $_.Length, (Get-FileHash $_.FullName -Algorithm SHA256).Hash
-          }
-
-      # --- checks ---
+      - name: Runtime binaries (Xray, geo rules, Wintun, AmneziaWG)
+        run: ./scripts/setup-bin.ps1
 
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --locked --lib
 
-      # --- build ---
-
       - name: Build installer (NSIS)
-        run: npm run tauri build -- --bundles nsis
+        run: |
+          $extra = @()
+          if ($env:TAURI_SIGNING_PRIVATE_KEY) { $extra = @('--config', 'src-tauri/tauri.updater.conf.json') }
+          npm run tauri build -- --bundles nsis @extra
 
       - uses: actions/upload-artifact@v4
         with:
           name: VeilBox-windows-${{ github.sha }}
-          path: src-tauri/target/release/bundle/nsis/*.exe
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
           if-no-files-found: error
-
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: src-tauri/target/release/bundle/nsis/*.exe
-          generate_release_notes: true
 
   macos:
     runs-on: macos-latest
@@ -102,16 +80,19 @@ jobs:
         include:
           - arch: arm64
             target: aarch64-apple-darwin
+            updater: darwin-aarch64
             goarch: arm64
             xray_asset: Xray-macos-arm64-v8a.zip
           - arch: x64
             target: x86_64-apple-darwin
+            updater: darwin-x86_64
             goarch: amd64
             xray_asset: Xray-macos-64.zip
     env:
       XRAY_VERSION: "v26.9.9"
       AMNEZIAWG_GO_REF: "v3.1.20260828"
       AMNEZIAWG_TOOLS_REF: "v3.1.20260812"
+      GEO_REPO: "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download"
     steps:
       - uses: actions/checkout@v4
 
@@ -134,12 +115,16 @@ jobs:
           go-version: "1.25"
           cache: false
 
+      - name: Version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/set-version.mjs "$GITHUB_REF_NAME"
+
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
 
       # --- runtime binaries for src-tauri/bin (see tauri.macos.conf.json) ---
 
-      - name: Xray + GeoIP/GeoSite (SHA-256 from the release .dgst)
+      - name: Xray (SHA-256 from the release .dgst)
         run: |
           set -euo pipefail
           base="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/${{ matrix.xray_asset }}"
@@ -148,8 +133,20 @@ jobs:
           want=$(grep -E '^SHA2-256=' "$RUNNER_TEMP/xray.dgst" | awk '{print $2}')
           have=$(shasum -a 256 "$RUNNER_TEMP/xray.zip" | awk '{print $1}')
           [ -n "$want" ] && [ "$want" = "$have" ] || { echo "xray SHA-256 mismatch: $have != $want"; exit 1; }
-          unzip -o "$RUNNER_TEMP/xray.zip" xray geoip.dat geosite.dat -d src-tauri/bin
+          unzip -o "$RUNNER_TEMP/xray.zip" xray -d src-tauri/bin
           chmod +x src-tauri/bin/xray
+
+      - name: Geo rules (runetfreedom, SHA-256 verified)
+        run: |
+          set -euo pipefail
+          for name in geoip.dat geosite.dat; do
+            curl -fsSL -o "$RUNNER_TEMP/$name" "$GEO_REPO/$name"
+            curl -fsSL -o "$RUNNER_TEMP/$name.sha256sum" "$GEO_REPO/$name.sha256sum"
+            want=$(awk '{print $1}' "$RUNNER_TEMP/$name.sha256sum")
+            have=$(shasum -a 256 "$RUNNER_TEMP/$name" | awk '{print $1}')
+            [ "$want" = "$have" ] || { echo "$name SHA-256 mismatch"; exit 1; }
+            cp "$RUNNER_TEMP/$name" "src-tauri/bin/$name"
+          done
 
       - name: amneziawg-go
         run: |
@@ -178,16 +175,49 @@ jobs:
       # --- build ---
 
       - name: Build app + DMG
-        run: npm run tauri build -- --target ${{ matrix.target }} --bundles app,dmg
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then extra=(--config src-tauri/tauri.updater.conf.json); fi
+          npm run tauri build -- --target ${{ matrix.target }} --bundles app,dmg ${extra[@]+"${extra[@]}"}
+
+      # The updater archive has the same name on both architectures: make it unique.
+      - name: Collect bundles
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/out"; mkdir -p "$out"
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          cp "$bundle"/dmg/*.dmg "$out/"
+          for f in "$bundle"/macos/*.app.tar.gz "$bundle"/macos/*.app.tar.gz.sig; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f")
+            cp "$f" "$out/${name/.app.tar.gz/_${{ matrix.updater }}.app.tar.gz}"
+          done
+          ls -la "$out"
 
       - uses: actions/upload-artifact@v4
         with:
           name: VeilBox-macos-${{ matrix.arch }}-${{ github.sha }}
-          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          path: ${{ runner.temp }}/out/*
           if-no-files-found: error
 
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: latest.json for the in-app updater
+        run: node scripts/updater-manifest.mjs dist "$GITHUB_REF_NAME" "${{ github.repository }}"
+
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          files: dist/*
+          generate_release_notes: true

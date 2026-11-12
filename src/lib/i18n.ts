@@ -69,6 +69,7 @@ const dictionary: Dict = {
   importSubscription: { ru: '\u0418\u043c\u043f\u043e\u0440\u0442 \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0438', en: 'Import subscription' },
   importConfig: { ru: '\u0418\u043c\u043f\u043e\u0440\u0442', en: 'Import' },
   subscriptionAction: { ru: '\u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0430', en: 'Subscription' },
+  heroProxyOnly: { ru: 'Только прокси: система не меняется', en: 'Proxy only: system untouched' },
   pingAll: { ru: '\u041f\u0438\u043d\u0433 \u0432\u0441\u0435\u0445', en: 'Ping all' },
   pinging: { ru: '\u041f\u0438\u043d\u0433...', en: 'Pinging...' },
   profilesSearchPlaceholder: { ru: '\u041f\u043e\u0438\u0441\u043a \u043f\u043e \u043f\u0440\u043e\u0444\u0438\u043b\u044f\u043c \u0438 \u0441\u0442\u0440\u0430\u043d\u0430\u043c', en: 'Search profiles and countries' },

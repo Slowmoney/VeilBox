@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
+  UpdateInfo,
   AboutInfo,
   ConnectionStatus,
   LogsResponse,
@@ -58,6 +59,8 @@ export const backend = {
   clearLogs: () => tauriInvoke<void>('clear_logs'),
   getProfileLatencies: () => tauriInvoke<ProfileLatency[]>('get_profile_latencies'),
   getProfileCountries: () => tauriInvoke<ProfileCountry[]>('get_profile_countries'),
+  checkUpdate: () => tauriInvoke<UpdateInfo | null>('check_update'),
+  installUpdate: () => tauriInvoke<void>('install_update'),
   listNetworkInterfaces: () =>
     tauriInvoke<NetworkInterfaceInfo[]>('list_network_interfaces'),
   getAbout: () => tauriInvoke<AboutInfo>('get_about_info'),

@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FlaskConical, PencilLine } from 'lucide-react';
+import { ChevronRight, FlaskConical, PencilLine, Power } from 'lucide-react';
 import { Button } from '../../components/Button';
 import { Modal } from '../../components/Modal';
-import { HeroShutterText } from '../../components/ui/hero-shutter-text';
 import { profileSubtitle } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { useAppStore } from '../../store/useAppStore';
 import { CountryFlag } from '../../components/CountryFlag';
+import { splitFlagFromName } from '../../lib/country';
 
 type HeroDisplayState = 'disconnected' | 'connecting' | 'connected' | 'failed';
 
@@ -22,6 +22,8 @@ export function ConnectionHero() {
   const testProfileConnection = useAppStore((state) => state.testProfileConnection);
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
   const selectedCountry = selectedProfile ? profileCountries[selectedProfile.id] : null;
+  const selectedName = selectedProfile ? splitFlagFromName(selectedProfile.name) : null;
+  const selectedFlag = selectedName?.code ?? selectedCountry?.countryCode;
   const supportsInlineTest = selectedProfile?.engine !== 'amneziawg';
   const busy = status.state === 'connecting';
   const connected = status.state === 'connected';
@@ -140,8 +142,12 @@ export function ConnectionHero() {
     settings.connectionMode === 'tun'
       ? `TUN ${settings.tunInterfaceName || 'xray0'}`
       : status.localHttpProxyPort
-        ? `127.0.0.1:${status.localHttpProxyPort}`
-        : t(language, 'heroProxyInactive');
+        ? settings.connectionMode === 'proxyOnly'
+          ? `HTTP 127.0.0.1:${status.localHttpProxyPort} · SOCKS 127.0.0.1:${status.localSocksProxyPort ?? '—'}`
+          : `127.0.0.1:${status.localHttpProxyPort}`
+        : settings.connectionMode === 'proxyOnly'
+          ? t(language, 'heroProxyOnly')
+          : t(language, 'heroProxyInactive');
 
   const onPrimaryAction = async () => {
     if (connected) {
@@ -176,46 +182,43 @@ export function ConnectionHero() {
   };
 
   return (
-    <section className="dashboard-hero">
+    <section className={`mobile-hero is-${displayState}`} data-tone={titleTone}>
       <button
         type="button"
-        className={`dashboard-hero-title${
-          displayState === 'connected' ? ' is-connected' : ''
-        }${displayState === 'connecting' ? ' is-connecting' : ''}${
-          displayState === 'failed' ? ' is-failed' : ''
-        }`}
+        className="power-button"
         onClick={() => void onPrimaryAction()}
         disabled={busy || (!connected && !selectedProfile)}
+        aria-label={title}
       >
-        <HeroShutterText text={title} tone={titleTone} />
+        <span className="power-button-ring" aria-hidden="true" />
+        <Power size={56} strokeWidth={2.2} />
       </button>
 
-      <div className="dashboard-hero-meta">
-        <span>
-          {t(language, 'heroConnectedFor')} {connectionDuration}
-        </span>
-        <span>|</span>
-        <span>HTTP proxy {modeLabel}</span>
-        <span>|</span>
-        <span>
-          {t(language, 'heroRestarts')} {status.restartCount}
-        </span>
-        {selectedProfile ? (
-          <span className="dashboard-hero-profile-meta">
-            <span>|</span>
-            <button
-              type="button"
-              className="dashboard-hero-profile-link"
-              onClick={() => setProfileDetailsOpen(true)}
-            >
-              {t(language, 'heroCurrentProfile')}:&nbsp;
-              <CountryFlag
-                code={selectedCountry?.countryCode}
-                className="profile-flag"
-                title={selectedCountry?.countryName ?? t(language, 'locationUnknown')}
-              />
-              <span>{selectedProfile.name}</span>
-            </button>
+      <div className="mobile-hero-state">{title}</div>
+      <div className="mobile-hero-timer">{connectionDuration}</div>
+
+      {selectedProfile ? (
+        <button
+          type="button"
+          className="mobile-hero-profile"
+          onClick={() => setProfileDetailsOpen(true)}
+          title={t(language, 'heroCurrentProfile')}
+        >
+          <CountryFlag
+            code={selectedFlag}
+            className="profile-flag"
+            title={selectedCountry?.countryName ?? t(language, 'locationUnknown')}
+          />
+          <span className="mobile-hero-profile-name">{selectedName?.label}</span>
+          <ChevronRight size={18} />
+        </button>
+      ) : null}
+
+      <div className="mobile-hero-meta">
+        <span>{modeLabel}</span>
+        {status.restartCount > 0 ? (
+          <span>
+            {t(language, 'heroRestarts')} {status.restartCount}
           </span>
         ) : null}
       </div>
@@ -229,11 +232,11 @@ export function ConnectionHero() {
           <div className="hero-profile-modal">
             <strong className="hero-profile-title">
               <CountryFlag
-                code={selectedCountry?.countryCode}
+                code={selectedFlag}
                 className="profile-flag"
                 title={selectedCountry?.countryName ?? t(language, 'locationUnknown')}
               />
-              <span>{selectedProfile.name}</span>
+              <span>{selectedName?.label}</span>
             </strong>
             <p>{profileSubtitle(selectedProfile)}</p>
             <div className="button-row hero-inline-actions">

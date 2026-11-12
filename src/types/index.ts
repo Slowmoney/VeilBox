@@ -1,6 +1,6 @@
 export type ThemeMode = 'dark' | 'light' | 'system';
 export type AppLanguage = 'ru' | 'en';
-export type ConnectionMode = 'systemProxy' | 'tun';
+export type ConnectionMode = 'systemProxy' | 'tun' | 'proxyOnly';
 export type SplitTunnelMode = 'disabled' | 'bypassListed' | 'proxyListed';
 export type ProfileSource = 'manual' | 'subscription';
 export type ProfileEngine = 'xray' | 'amneziawg';
@@ -208,4 +208,11 @@ export interface AmneziaProfileDraft {
   id?: string;
   name: string;
   rawConfig: string;
+}
+
+export interface UpdateInfo {
+  currentVersion: string;
+  version: string;
+  notes?: string | null;
+  date?: string | null;
 }

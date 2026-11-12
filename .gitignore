@@ -40,6 +40,10 @@ desktop.ini
 # Keep placeholders, ignore bundled runtime binaries by default
 src-tauri/bin/*.exe
 src-tauri/bin/*.dll
+# macOS runtime binaries (CI / scripts put them here)
+src-tauri/bin/xray
+src-tauri/bin/amneziawg-go
+src-tauri/bin/awg
 !src-tauri/bin/PLACE_XRAY_HERE.txt
 !src-tauri/bin/PLACE_WINTUN_HERE.txt
 

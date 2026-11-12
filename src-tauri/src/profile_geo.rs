@@ -22,6 +22,20 @@ struct IpWhoIsResponse {
     country: Option<String>,
 }
 
+/// Country from a leading flag emoji in the profile name ("🇳🇱 NL" -> "NL").
+/// Subscriptions name servers this way; it is more reliable than a GeoIP
+/// lookup of the endpoint (a relay or anycast IP can be elsewhere).
+pub fn flag_country_code(name: &str) -> Option<String> {
+    let mut chars = name.trim_start().chars();
+    let to_letter = |c: char| {
+        let code = c as u32;
+        (0x1F1E6..=0x1F1FF).contains(&code).then(|| char::from_u32(code - 0x1F1E6 + u32::from(b'A')))?
+    };
+    let first = to_letter(chars.next()?)?;
+    let second = to_letter(chars.next()?)?;
+    Some(format!("{first}{second}"))
+}
+
 pub async fn resolve_profile_countries(profiles: Vec<Profile>) -> Vec<ProfileCountry> {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
@@ -41,7 +55,11 @@ pub async fn resolve_profile_countries(profiles: Vec<Profile>) -> Vec<ProfileCou
         }
     };
 
-    let hosts: HashSet<String> = profiles.iter().map(|profile| profile.server_address.clone()).collect();
+    let hosts: HashSet<String> = profiles
+        .iter()
+        .filter(|profile| flag_country_code(&profile.name).is_none())
+        .map(|profile| profile.server_address.clone())
+        .collect();
     let mut cache: HashMap<String, Option<CountryInfo>> = HashMap::new();
     let mut tasks = JoinSet::new();
     for host in hosts {
@@ -61,6 +79,13 @@ pub async fn resolve_profile_countries(profiles: Vec<Profile>) -> Vec<ProfileCou
     }
 
     profiles.into_iter().map(|profile| {
+        if let Some(code) = flag_country_code(&profile.name) {
+            return ProfileCountry {
+                profile_id: profile.id,
+                country_name: Some(code.clone()),
+                country_code: Some(code),
+            };
+        }
         let entry = cache.get(&profile.server_address).and_then(Option::as_ref);
         ProfileCountry {
             profile_id: profile.id,
@@ -106,5 +131,19 @@ fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => !(ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_multicast() || ip.is_unspecified()),
         IpAddr::V6(ip) => !(ip.is_loopback() || ip.is_multicast() || ip.is_unspecified() || ip.is_unique_local() || ip.is_unicast_link_local()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::flag_country_code;
+
+    #[test]
+    fn reads_leading_flag_emoji() {
+        assert_eq!(flag_country_code("🇳🇱 NL").as_deref(), Some("NL"));
+        assert_eq!(flag_country_code("  🇷🇺 Через Россию").as_deref(), Some("RU"));
+        assert_eq!(flag_country_code("🌍 Авто — лучший сервер"), None);
+        assert_eq!(flag_country_code("quartz"), None);
+        assert_eq!(flag_country_code("NL 🇳🇱"), None);
     }
 }

@@ -7,7 +7,12 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "setup": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup-bin.ps1",
+    "setup:geo": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup-bin.ps1 -GeoOnly",
+    "app": "tauri dev",
+    "app:build": "tauri build --bundles nsis",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml --lib"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.0",
