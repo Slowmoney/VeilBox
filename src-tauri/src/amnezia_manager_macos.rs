@@ -193,7 +193,7 @@ fn build_script(state: &AppState, config: &AmneziaConfig, endpoint_ip: IpAddr, f
     };
 
     format!(
-        r#"RUN={run}; READY={ready}; LOG={log}; NAMEF={namef}; DNSF={dnsf}; APP={app}
+        r#"RUN={run}; READY={ready}; LOG={log}; NAMEF={namef}; DNSF={dnsf}; STATUS={status}; APP={app}
 : > "$LOG"
 rm -f "$READY" "$NAMEF"
 WG_TUN_NAME_FILE="$NAMEF" {go} utun >> "$LOG" 2>&1 || exit 1
@@ -204,7 +204,7 @@ down() {{
 {dns_down}
 {endpoint_route_down}
 rm -f "/var/run/amneziawg/$IF.sock" "/var/run/wireguard/$IF.sock"
-rm -f "$READY" "$RUN" "$NAMEF"
+rm -f "$READY" "$RUN" "$NAMEF" "$STATUS" "$STATUS.tmp"
 }}
 {awg} setconf "$IF" {conf} >> "$LOG" 2>&1 || {{ down; exit 1; }}
 {addresses}
@@ -213,7 +213,13 @@ rm -f "$READY" "$RUN" "$NAMEF"
 {routes}
 {dns_up}
 echo "$IF" > "$READY"; chmod 644 "$READY" "$LOG"
-while [ -e "$RUN" ] && kill -0 "$APP" 2>/dev/null && /sbin/ifconfig "$IF" >/dev/null 2>&1; do sleep 1; done
+n=0
+while [ -e "$RUN" ] && kill -0 "$APP" 2>/dev/null && /sbin/ifconfig "$IF" >/dev/null 2>&1; do
+  if [ $((n % 2)) -eq 0 ]; then
+    {awg} show "$IF" dump > "$STATUS.tmp" 2>/dev/null && chmod 644 "$STATUS.tmp" && mv -f "$STATUS.tmp" "$STATUS"
+  fi
+  n=$((n+1)); sleep 1
+done
 down
 exit 0"#,
         run = shell_quote(&files.run.to_string_lossy()),
@@ -221,6 +227,7 @@ exit 0"#,
         log = shell_quote(&files.log.to_string_lossy()),
         namef = shell_quote(&files.name.to_string_lossy()),
         dnsf = shell_quote(&files.dns.to_string_lossy()),
+        status = shell_quote(&files.status.to_string_lossy()),
         app = std::process::id(),
         go = shell_quote(&state.paths.amnezia_sidecar_path.to_string_lossy()),
         awg = shell_quote(&awg_tool(state).to_string_lossy()),
@@ -237,6 +244,8 @@ struct Files {
     log: PathBuf,
     name: PathBuf,
     dns: PathBuf,
+    /// `awg show <if> dump`, refreshed by the root script (see `awg_status`).
+    status: PathBuf,
     setconf: PathBuf,
     script: PathBuf,
 }
@@ -249,6 +258,7 @@ fn files(state: &AppState) -> Files {
         log: dir.join("awg.log"),
         name: dir.join("awg.name"),
         dns: dir.join("awg.dns"),
+        status: crate::awg_status::status_file(state),
         setconf: dir.join("awg-setconf.conf"),
         script: dir.join("awg-up.sh"),
     }
@@ -486,7 +496,7 @@ pub async fn cleanup_on_launch(state: &AppState) -> AppResult<()> {
     // A script left from a previous run stops by itself: the app PID it
     // watches is gone. Remove its leftovers.
     let files = files(state);
-    for path in [files.run, files.ready, files.setconf] {
+    for path in [files.run, files.ready, files.setconf, files.status] {
         let _ = std::fs::remove_file(path);
     }
     Ok(())

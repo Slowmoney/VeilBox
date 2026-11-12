@@ -1,5 +1,6 @@
 mod amnezia_manager;
 mod amnezia_parser;
+mod awg_status;
 mod commands;
 mod connection_manager;
 mod config_builder;
@@ -183,6 +184,7 @@ pub fn run() {
             commands::get_profile_latencies,
             commands::get_profile_countries,
             commands::list_network_interfaces,
+            commands::amnezia_status,
             commands::get_about_info,
             commands::check_update,
             commands::install_update

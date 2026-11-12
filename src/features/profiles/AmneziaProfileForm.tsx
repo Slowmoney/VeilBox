@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Button } from '../../components/Button';
-import { Field, TextArea, TextInput } from '../../components/Field';
+import { useTx } from '../../lib/useTx';
+import { Button, Field, Input, TextArea } from '../../ui';
 import type { Profile } from '../../types';
 
 interface AmneziaProfileFormProps {
@@ -12,6 +12,7 @@ interface AmneziaProfileFormProps {
 export function AmneziaProfileForm({ profile, onSave, onCancel }: AmneziaProfileFormProps) {
   const [name, setName] = useState(profile?.name ?? '');
   const [saving, setSaving] = useState(false);
+  const tx = useTx();
 
   useEffect(() => {
     setName(profile?.name ?? '');
@@ -63,32 +64,25 @@ export function AmneziaProfileForm({ profile, onSave, onCancel }: AmneziaProfile
   };
 
   return (
-    <div className="profile-form">
-      <div className="section-title-row">
-        <div>
-          <h3>AmneziaWG profile</h3>
-          <p>Unified profile shell is ready. This build currently lets you rename and inspect the imported config.</p>
-        </div>
-      </div>
-
-      <Field label="Display name">
-        <TextInput value={name} onChange={(event) => setName(event.target.value)} />
+    <div className="ui-form">
+      <Field label={tx('Название', 'Name')}>
+        <Input value={name} onChange={(event) => setName(event.target.value)} />
       </Field>
 
-      <Field label="Endpoint">
-        <TextInput value={`${profile.serverAddress}:${profile.port}`} readOnly />
+      <Field label={tx('Сервер', 'Server')}>
+        <Input value={`${profile.serverAddress}:${profile.port}`} readOnly />
       </Field>
 
-      <Field label="Imported config">
-        <TextArea rows={12} value={profile.amneziaConfig.rawConfig} readOnly />
+      <Field label={tx('Конфиг', 'Config')}>
+        <TextArea mono rows={12} value={profile.amneziaConfig.rawConfig} readOnly />
       </Field>
 
-      <div className="button-row">
-        <Button onClick={() => void submit()} disabled={saving}>
-          {saving ? 'Saving...' : 'Save profile'}
+      <div className="ui-actions">
+        <Button block onClick={() => void submit()} disabled={saving}>
+          {saving ? tx('Сохранение…', 'Saving…') : tx('Сохранить', 'Save')}
         </Button>
-        <Button variant="secondary" onClick={onCancel}>
-          Cancel
+        <Button variant="secondary" block onClick={onCancel}>
+          {tx('Отмена', 'Cancel')}
         </Button>
       </div>
     </div>

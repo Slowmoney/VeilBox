@@ -6,7 +6,7 @@ use crate::{
     error::AppError,
     latency_manager,
     models::{
-        AboutInfo, BootstrapResponse, ConnectionStatusPayload, LogReadMode, LogsResponse, Profile,
+        AboutInfo, AwgStatus, BootstrapResponse, ConnectionStatusPayload, LogReadMode, LogsResponse, Profile,
         NetworkInterfaceInfo, ProfileCountry, ProfileInput, ProfileLatency, Settings,
         SettingsPatch, Subscription, SubscriptionImportResult, TestConnectionResult,
     },
@@ -273,6 +273,11 @@ pub async fn get_profile_countries(
     state: State<'_, AppState>,
 ) -> Result<Vec<ProfileCountry>, AppError> {
     Ok(profile_geo::resolve_profile_countries(state.profile_store.list().await).await)
+}
+
+#[tauri::command]
+pub async fn amnezia_status(state: State<'_, AppState>) -> Result<Option<AwgStatus>, AppError> {
+    crate::awg_status::read_status(state.inner()).await
 }
 
 #[tauri::command]

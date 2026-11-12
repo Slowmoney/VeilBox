@@ -372,6 +372,17 @@ pub struct LogsResponse {
     pub connection: Vec<LogEntry>,
 }
 
+/// Live AmneziaWG tunnel state from `awg show <interface> dump`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AwgStatus {
+    /// Unix seconds of the last handshake; `None` when none happened yet.
+    pub latest_handshake_at: Option<i64>,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub endpoint: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileLatency {

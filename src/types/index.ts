@@ -131,6 +131,14 @@ export interface ProfileLatency {
   message: string | null;
 }
 
+export interface AwgStatus {
+  /** Unix seconds of the last handshake; null when none happened yet. */
+  latestHandshakeAt: number | null;
+  rxBytes: number;
+  txBytes: number;
+  endpoint: string | null;
+}
+
 export interface ProfileCountry {
   profileId: string;
   countryCode: string | null;

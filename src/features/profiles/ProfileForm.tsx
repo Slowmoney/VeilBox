@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Button } from '../../components/Button';
-import { Field, TextArea, TextInput } from '../../components/Field';
+import { useEffect, useState } from 'react';
+import { useTx } from '../../lib/useTx';
+import { Button, Field, Input, Select, Switch, TextArea } from '../../ui';
 import type { ManualProfileDraft, Profile } from '../../types';
 
 interface ProfileFormProps {
@@ -79,10 +79,7 @@ export function ProfileForm({ profile, onSave, onCancel }: ProfileFormProps) {
     setDraft(normalizeDraft(profile));
   }, [profile]);
 
-  const title = useMemo(
-    () => (profile ? 'Редактирование профиля' : 'Новый профиль'),
-    [profile],
-  );
+  const tx = useTx();
 
   const update = <K extends keyof ManualProfileDraft>(key: K, value: ManualProfileDraft[K]) =>
     setDraft((current) => ({ ...current, [key]: value }));
@@ -118,17 +115,9 @@ export function ProfileForm({ profile, onSave, onCancel }: ProfileFormProps) {
   };
 
   return (
-    <div className="profile-form">
-      <div className="section-title-row">
-        <div>
-          <h3>{title}</h3>
-          <p>VLESS, Shadowsocks и Hysteria2 через Xray.</p>
-        </div>
-      </div>
-
-      <div className="field-grid">
-        <Field label="Protocol">
-          <select className="select" value={draft.protocol}
+    <div className="ui-form">
+        <Field label={tx('Протокол', 'Protocol')}>
+          <Select value={draft.protocol}
             onChange={(event) => {
               const protocol = event.target.value as ManualProfileDraft['protocol'];
               setDraft((current) => ({...current, protocol,
@@ -137,19 +126,19 @@ export function ProfileForm({ profile, onSave, onCancel }: ProfileFormProps) {
             <option value="vless">VLESS</option>
             <option value="shadowsocks">Shadowsocks</option>
             <option value="hysteria2">Hysteria2</option>
-          </select>
+          </Select>
         </Field>
-        <Field label="Имя профиля">
-          <TextInput value={draft.name} onChange={(event) => update('name', event.target.value)} />
+        <Field label={tx('Имя профиля', 'Name')}>
+          <Input value={draft.name} onChange={(event) => update('name', event.target.value)} />
         </Field>
-        <Field label="Адрес сервера">
-          <TextInput
+        <Field label={tx('Адрес сервера', 'Server address')}>
+          <Input
             value={draft.serverAddress}
             onChange={(event) => update('serverAddress', event.target.value)}
           />
         </Field>
-        <Field label="Порт">
-          <TextInput
+        <Field label={tx('Порт', 'Port')}>
+          <Input
             type="number"
             min={1}
             max={65535}
@@ -158,21 +147,20 @@ export function ProfileForm({ profile, onSave, onCancel }: ProfileFormProps) {
           />
         </Field>
         {draft.protocol === 'vless' ? <Field label="UUID">
-          <TextInput value={draft.uuid} onChange={(event) => update('uuid', event.target.value)} />
+          <Input value={draft.uuid} onChange={(event) => update('uuid', event.target.value)} />
         </Field> : null}
         {draft.protocol !== 'vless' ? <Field label={draft.protocol === 'shadowsocks' ? 'Password' : 'Auth password'}>
-          <TextInput type="password" value={draft.password} onChange={(event) => update('password', event.target.value)} />
+          <Input type="password" value={draft.password} onChange={(event) => update('password', event.target.value)} />
         </Field> : null}
         {draft.protocol === 'shadowsocks' ? <Field label="Cipher method">
-          <TextInput value={draft.method} onChange={(event) => update('method', event.target.value)} />
+          <Input value={draft.method} onChange={(event) => update('method', event.target.value)} />
         </Field> : null}
         {draft.protocol === 'hysteria2' ? <Field label="Salamander obfs password (optional)">
-          <TextInput type="password" value={draft.obfsPassword} onChange={(event) => update('obfsPassword', event.target.value)} />
+          <Input type="password" value={draft.obfsPassword} onChange={(event) => update('obfsPassword', event.target.value)} />
         </Field> : null}
         {draft.protocol === 'vless' ? <>
-        <Field label="Тип транспорта">
-          <select
-            className="select"
+        <Field label={tx('Тип транспорта', 'Transport')}>
+          <Select
             value={draft.networkType}
             onChange={(event) =>
               update('networkType', event.target.value as ManualProfileDraft['networkType'])
@@ -185,11 +173,10 @@ export function ProfileForm({ profile, onSave, onCancel }: ProfileFormProps) {
             <option value="xhttp">XHTTP</option>
             <option value="httpupgrade">HTTPUpgrade</option>
             <option value="kcp">mKCP</option>
-          </select>
+          </Select>
         </Field>
-        <Field label="Тип безопасности">
-          <select
-            className="select"
+        <Field label={tx('Тип безопасности', 'Security')}>
+          <Select
             value={draft.securityType}
             onChange={(event) =>
               update('securityType', event.target.value as ManualProfileDraft['securityType'])
@@ -198,50 +185,49 @@ export function ProfileForm({ profile, onSave, onCancel }: ProfileFormProps) {
             <option value="none">None</option>
             <option value="reality">Reality</option>
             <option value="tls">TLS</option>
-          </select>
+          </Select>
         </Field>
         <Field label="Flow">
-          <TextInput value={draft.flow} onChange={(event) => update('flow', event.target.value)} />
+          <Input value={draft.flow} onChange={(event) => update('flow', event.target.value)} />
         </Field>
         <Field label="SNI / имя сервера">
-          <TextInput value={draft.sni} onChange={(event) => update('sni', event.target.value)} />
+          <Input value={draft.sni} onChange={(event) => update('sni', event.target.value)} />
         </Field>
         <Field label="Fingerprint">
-          <TextInput
+          <Input
             value={draft.fingerprint}
             onChange={(event) => update('fingerprint', event.target.value)}
           />
         </Field>
         <Field label="Public key">
-          <TextInput
+          <Input
             value={draft.publicKey}
             onChange={(event) => update('publicKey', event.target.value)}
           />
         </Field>
         <Field label="Short ID">
-          <TextInput value={draft.shortId} onChange={(event) => update('shortId', event.target.value)} />
+          <Input value={draft.shortId} onChange={(event) => update('shortId', event.target.value)} />
         </Field>
         <Field label="SpiderX">
-          <TextInput value={draft.spiderX} onChange={(event) => update('spiderX', event.target.value)} />
+          <Input value={draft.spiderX} onChange={(event) => update('spiderX', event.target.value)} />
         </Field>
         <Field label="Path">
-          <TextInput value={draft.path} onChange={(event) => update('path', event.target.value)} />
+          <Input value={draft.path} onChange={(event) => update('path', event.target.value)} />
         </Field>
         <Field label="Host / Authority">
-          <TextInput
+          <Input
             value={draft.hostHeader}
             onChange={(event) => update('hostHeader', event.target.value)}
           />
         </Field>
         <Field label="Service name">
-          <TextInput
+          <Input
             value={draft.serviceName}
             onChange={(event) => update('serviceName', event.target.value)}
           />
         </Field>
-        <Field label="Режим XHTTP">
-          <select
-            className="select"
+        <Field label={tx('Режим XHTTP', 'XHTTP mode')}>
+          <Select
             value={draft.xhttpMode}
             onChange={(event) => update('xhttpMode', event.target.value)}
           >
@@ -249,11 +235,10 @@ export function ProfileForm({ profile, onSave, onCancel }: ProfileFormProps) {
             <option value="packet-up">packet-up</option>
             <option value="stream-up">stream-up</option>
             <option value="stream-one">stream-one</option>
-          </select>
+          </Select>
         </Field>
-        <Field label="Тип transport header">
-          <select
-            className="select"
+        <Field label={tx('Тип transport header', 'Transport header type')}>
+          <Select
             value={draft.transportHeaderType}
             onChange={(event) => update('transportHeaderType', event.target.value)}
           >
@@ -263,17 +248,17 @@ export function ProfileForm({ profile, onSave, onCancel }: ProfileFormProps) {
             <option value="wechat-video">wechat-video</option>
             <option value="dtls">dtls</option>
             <option value="wireguard">wireguard</option>
-          </select>
+          </Select>
         </Field>
         <Field label="Seed">
-          <TextInput value={draft.seed} onChange={(event) => update('seed', event.target.value)} />
+          <Input value={draft.seed} onChange={(event) => update('seed', event.target.value)} />
         </Field>
         </> : null}
         {draft.protocol === 'hysteria2' ? <Field label="SNI">
-          <TextInput value={draft.sni} onChange={(event) => update('sni', event.target.value)} />
+          <Input value={draft.sni} onChange={(event) => update('sni', event.target.value)} />
         </Field> : null}
-        {draft.protocol !== 'shadowsocks' ? <Field label="ALPN" hint="Через запятую, например h2,http/1.1">
-          <TextInput
+        {draft.protocol !== 'shadowsocks' ? <Field label="ALPN" hint={tx('Через запятую, например h2,http/1.1', 'Comma separated, e.g. h2,http/1.1')}>
+          <Input
             value={draft.alpn.join(',')}
             onChange={(event) =>
               update(
@@ -286,9 +271,8 @@ export function ProfileForm({ profile, onSave, onCancel }: ProfileFormProps) {
             }
           />
         </Field> : null}
-      </div>
 
-      <Field label="Описание / remark">
+      <Field label={tx('Описание', 'Note')}>
         <TextArea
           rows={4}
           value={draft.remark}
@@ -296,21 +280,27 @@ export function ProfileForm({ profile, onSave, onCancel }: ProfileFormProps) {
         />
       </Field>
 
-      {draft.protocol !== 'shadowsocks' ? <label className="checkbox-row">
-        <input
-          type="checkbox"
-          checked={draft.allowInsecure}
-          onChange={(event) => update('allowInsecure', event.target.checked)}
-        />
-        <span>Разрешить небезопасную TLS-проверку</span>
-      </label> : null}
+      {draft.protocol !== 'shadowsocks' ? (
+        <div className="ui-group">
+          <div className="ui-row">
+            <span className="ui-row__main">
+              <span className="ui-row__title">{tx('Не проверять сертификат TLS', 'Skip TLS certificate check')}</span>
+            </span>
+            <Switch
+              checked={draft.allowInsecure}
+              label={tx('Не проверять сертификат TLS', 'Skip TLS certificate check')}
+              onChange={(value) => update('allowInsecure', value)}
+            />
+          </div>
+        </div>
+      ) : null}
 
-      <div className="button-row">
-        <Button onClick={() => void submit()} disabled={saving}>
-          {saving ? 'Сохранение...' : 'Сохранить профиль'}
+      <div className="ui-actions">
+        <Button block onClick={() => void submit()} disabled={saving}>
+          {saving ? tx('Сохранение…', 'Saving…') : tx('Сохранить', 'Save')}
         </Button>
-        <Button variant="secondary" onClick={onCancel}>
-          Отмена
+        <Button variant="secondary" block onClick={onCancel}>
+          {tx('Отмена', 'Cancel')}
         </Button>
       </div>
     </div>

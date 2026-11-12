@@ -5,6 +5,7 @@ import { isSubscriptionRefreshDue } from '../lib/format';
 import { backend } from '../lib/tauri';
 import type {
   AboutInfo,
+  AwgStatus,
   BackendError,
   ConnectionStatus,
   LogsResponse,
@@ -30,6 +31,8 @@ interface AppStore {
   profileCountries: Record<string, ProfileCountry>;
   settings: Settings;
   about: AboutInfo | null;
+  /** Live AmneziaWG tunnel state; polled while connected through an AmneziaWG profile. */
+  awgStatus: AwgStatus | null;
   toasts: ToastMessage[];
   listenersAttached: boolean;
   initialize: () => Promise<void>;
@@ -52,7 +55,7 @@ interface AppStore {
   refreshAllSubscriptions: () => Promise<void>;
   deleteSubscription: (subscriptionId: string) => Promise<void>;
   selectProfile: (profileId: string | null) => Promise<void>;
-  saveSettings: (patch: Partial<Settings>) => Promise<void>;
+  saveSettings: (patch: Partial<Settings>, options?: { silent?: boolean }) => Promise<void>;
   connect: (profileId: string) => Promise<void>;
   disconnect: () => Promise<void>;
   testProfileConnection: (profileId: string) => Promise<TestConnectionResult | null>;
@@ -80,8 +83,8 @@ const defaultSettings: Settings = {
   minimizeToTray: true,
   autoReconnect: true,
   balanceServers: false,
-  theme: 'light',
-  language: 'en',
+  theme: 'dark',
+  language: 'ru',
   debugLogging: false,
   connectionMode: 'systemProxy',
   tunInterfaceName: 'xray0',
@@ -171,6 +174,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   profileCountries: {},
   settings: defaultSettings,
   about: null,
+  awgStatus: null,
   toasts: [],
   listenersAttached: false,
 
@@ -425,14 +429,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
       await get().refreshProfiles();
       await get().selectProfile(profile.id);
       get().pushToast({
-        title: 'Amnezia config imported',
-        message: `${profile.name} is ready in the shared profile list.`,
+        title: 'Конфиг AmneziaWG добавлен',
+        message: `${profile.name} добавлен в список серверов.`,
         tone: 'success',
       });
     } catch (error) {
       const payload = mapError(error);
       get().pushToast({
-        title: 'Amnezia import failed',
+        title: 'Не удалось добавить конфиг AmneziaWG',
         message: payload.message,
         tone: 'error',
       });
@@ -445,14 +449,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
       await get().refreshProfiles();
       await get().selectProfile(profile.id);
       get().pushToast({
-        title: 'Amnezia link imported',
-        message: `${profile.name} is ready in the shared profile list.`,
+        title: 'Ссылка Amnezia добавлена',
+        message: `${profile.name} добавлен в список серверов.`,
         tone: 'success',
       });
     } catch (error) {
       const payload = mapError(error);
       get().pushToast({
-        title: 'Amnezia link import failed',
+        title: 'Не удалось добавить ссылку Amnezia',
         message: payload.message,
         tone: 'error',
       });
@@ -605,7 +609,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
 
-  saveSettings: async (patch) => {
+  saveSettings: async (patch, options) => {
     try {
       if (typeof patch.launchAtStartup === 'boolean') {
         if (patch.launchAtStartup) {
@@ -622,11 +626,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
           launchAtStartup: await isEnabled(),
         },
       });
-      get().pushToast({
-        title: 'Настройки обновлены',
-        message: 'Параметры сохранены локально.',
-        tone: 'success',
-      });
+      if (!options?.silent) {
+        get().pushToast({
+          title: 'Настройки обновлены',
+          message: 'Параметры сохранены локально.',
+          tone: 'success',
+        });
+      }
     } catch (error) {
       const payload = mapError(error);
       get().pushToast({
@@ -642,11 +648,25 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const connectionStatus = await backend.connect(profileId);
       set({ connectionStatus });
       await get().refreshLogs('preview');
-      get().pushToast({
-        title: 'Подключено',
-        message: 'Маршрут через Xray успешно активирован.',
-        tone: 'success',
-      });
+      const { profiles, settings } = get();
+      const isAwg = profiles.find((profile) => profile.id === profileId)?.engine === 'amneziawg';
+      if (isAwg && settings.connectionMode === 'proxyOnly') {
+        // AmneziaWG is always a system tunnel; it cannot be a local proxy.
+        get().pushToast({
+          title:
+            settings.language === 'ru'
+              ? 'AmneziaWG работает только туннелем — подключено как туннель'
+              : 'AmneziaWG only works as a tunnel — connected as a tunnel',
+          message: '',
+          tone: 'info',
+        });
+      } else {
+        get().pushToast({
+          title: settings.language === 'ru' ? 'Подключено' : 'Connected',
+          message: '',
+          tone: 'success',
+        });
+      }
     } catch (error) {
       const payload = mapError(error);
       get().pushToast({
@@ -719,6 +739,47 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
 }));
+
+// Live AmneziaWG status: poll every 2 s while connected through an AmneziaWG
+// profile; cleared as soon as the tunnel is gone. A failing command just keeps
+// the status empty (the UI then shows "no handshake"), no toasts.
+const AWG_POLL_MS = 2000;
+let awgTimer: ReturnType<typeof setInterval> | null = null;
+
+function isAwgSession(state: AppStore) {
+  if (state.connectionStatus.state !== 'connected') {
+    return false;
+  }
+  const activeId = state.connectionStatus.activeProfileId;
+  return state.profiles.some((profile) => profile.id === activeId && profile.engine === 'amneziawg');
+}
+
+async function pollAwgStatus() {
+  try {
+    const awgStatus = await backend.amneziaStatus();
+    if (isAwgSession(useAppStore.getState())) {
+      useAppStore.setState({ awgStatus });
+    }
+  } catch {
+    if (isAwgSession(useAppStore.getState())) {
+      useAppStore.setState({ awgStatus: null });
+    }
+  }
+}
+
+useAppStore.subscribe((state) => {
+  const active = isAwgSession(state);
+  if (active && awgTimer === null) {
+    void pollAwgStatus();
+    awgTimer = setInterval(() => void pollAwgStatus(), AWG_POLL_MS);
+  } else if (!active && awgTimer !== null) {
+    clearInterval(awgTimer);
+    awgTimer = null;
+    if (state.awgStatus !== null) {
+      useAppStore.setState({ awgStatus: null });
+    }
+  }
+});
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {

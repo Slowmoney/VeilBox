@@ -1,12 +1,18 @@
 import { useEffect } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { AppShell } from './components/AppShell';
+import { detectImportKind } from './lib/importDetect';
 import { applyTheme } from './lib/theme';
-import { AboutPage } from './pages/AboutPage';
-import { DashboardPage } from './pages/DashboardPage';
-import { LogsPage } from './pages/LogsPage';
-import { SettingsPage } from './pages/SettingsPage';
+import { AboutScreen } from './screens/AboutScreen';
+import { ExclusionsScreen } from './screens/ExclusionsScreen';
+import { HomeScreen } from './screens/HomeScreen';
+import { JournalScreen } from './screens/JournalScreen';
+import { LegalScreen } from './screens/LegalScreen';
+import { ProfileEditScreen } from './screens/ProfileEditScreen';
+import { ServersScreen } from './screens/ServersScreen';
+import { SettingsScreen } from './screens/SettingsScreen';
+import { TunScreen } from './screens/TunScreen';
 import { useAppStore } from './store/useAppStore';
+import { AppShell } from './ui/AppShell';
 
 function AppContent() {
   const location = useLocation();
@@ -28,7 +34,16 @@ function AppContent() {
 
   useEffect(() => {
     applyTheme(theme);
+    if (theme !== 'system') {
+      return;
+    }
+    const media = window.matchMedia('(prefers-color-scheme: light)');
+    const onChange = () => applyTheme('system');
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
   }, [theme]);
+
+  const journalOpen = location.pathname === '/settings/journal';
 
   useEffect(() => {
     if (!initialized) {
@@ -37,8 +52,8 @@ function AppContent() {
 
     const statusTimer = window.setInterval(() => {
       void refreshConnectionStatus();
-      if (location.pathname === '/' || location.pathname === '/logs') {
-        void refreshLogs(location.pathname === '/logs' ? 'full' : 'preview');
+      if (journalOpen) {
+        void refreshLogs('full');
       }
     }, 3000);
 
@@ -64,16 +79,13 @@ function AppContent() {
       window.clearInterval(subscriptionTimer);
       window.clearInterval(updateTimer);
     };
-  }, [initialized, location.pathname, refreshConnectionStatus, refreshLatencies, refreshLogs]);
+  }, [initialized, journalOpen, refreshConnectionStatus, refreshLatencies, refreshLogs]);
 
+  // Ctrl+V anywhere outside a text field imports whatever was copied.
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
       const active = document.activeElement as HTMLElement | null;
-      if (
-        active?.tagName === 'INPUT' ||
-        active?.tagName === 'TEXTAREA' ||
-        active?.isContentEditable
-      ) {
+      if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA' || active?.isContentEditable) {
         return;
       }
 
@@ -82,32 +94,27 @@ function AppContent() {
         return;
       }
 
-      if (/^(vless|ss|hy2|hysteria2):\/\//i.test(text)) {
-        event.preventDefault();
-        void importProfile(text);
+      const kind = detectImportKind(text);
+      if (kind === 'unknown') {
         return;
       }
-
-      if (/^https?:\/\//i.test(text)) {
-        event.preventDefault();
-        void importSubscription(text);
-        return;
-      }
-
-      if (/^(?:amnezia\s+)?vpn:\/\//i.test(text)) {
-        event.preventDefault();
-        void importAmneziaUri(text);
-        return;
-      }
-
-      if (text.startsWith('{') || text.startsWith('[')) {
-        if (/\[interface\][\s\S]*\[peer\]/i.test(text)) {
-          event.preventDefault();
+      event.preventDefault();
+      switch (kind) {
+        case 'proxyUri':
+          void importProfile(text);
+          break;
+        case 'subscription':
+          void importSubscription(text);
+          break;
+        case 'amneziaUri':
+          void importAmneziaUri(text);
+          break;
+        case 'amneziaConfig':
           void importAmneziaConfig(text);
-          return;
-        }
-        event.preventDefault();
-        void importProfilesJson(text);
+          break;
+        case 'json':
+          void importProfilesJson(text);
+          break;
       }
     };
 
@@ -118,10 +125,15 @@ function AppContent() {
   return (
     <AppShell>
       <Routes>
-        <Route path="/" element={<DashboardPage />} />
-        <Route path="/logs" element={<LogsPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/about" element={<AboutPage />} />
+        <Route path="/" element={<HomeScreen />} />
+        <Route path="/servers" element={<ServersScreen />} />
+        <Route path="/servers/profile/:id" element={<ProfileEditScreen />} />
+        <Route path="/settings" element={<SettingsScreen />} />
+        <Route path="/settings/exclusions" element={<ExclusionsScreen />} />
+        <Route path="/settings/tun" element={<TunScreen />} />
+        <Route path="/settings/journal" element={<JournalScreen />} />
+        <Route path="/settings/about" element={<AboutScreen />} />
+        <Route path="/settings/about/:doc" element={<LegalScreen />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppShell>
