@@ -44,6 +44,9 @@ src-tauri/bin/*.dll
 src-tauri/bin/xray
 src-tauri/bin/amneziawg-go
 src-tauri/bin/awg
+# Geo rules are downloaded fresh (npm run setup / CI), not stored in git
+src-tauri/bin/geoip.dat
+src-tauri/bin/geosite.dat
 !src-tauri/bin/PLACE_XRAY_HERE.txt
 !src-tauri/bin/PLACE_WINTUN_HERE.txt
 
