@@ -53,3 +53,6 @@ src-tauri/bin/geosite.dat
 # Optional local screenshots / exports
 screenshots/
 artifacts/
+
+# Brainstorm mockups (local)
+.superpowers/
