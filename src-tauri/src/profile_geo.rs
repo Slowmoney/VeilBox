@@ -39,7 +39,7 @@ pub fn flag_country_code(name: &str) -> Option<String> {
 pub async fn resolve_profile_countries(profiles: Vec<Profile>) -> Vec<ProfileCountry> {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
-        .user_agent("VeilBox/0.1")
+        .user_agent(concat!("VeilBox/", env!("CARGO_PKG_VERSION")))
         .build()
     {
         Ok(client) => client,

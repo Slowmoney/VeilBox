@@ -149,7 +149,7 @@ fn base_profile(name: String, server_address: String, port: u16, protocol: Proxy
         short_id: None, spider_x: None, path: None, host_header: None,
         service_name: None, xhttp_mode: None, transport_header_type: None,
         seed: None, alpn, allow_insecure, remark: None, source: None,
-        source_label: None, subscription_id: None, amnezia_config: None,
+        source_label: None, subscription_id: None, amnezia_config: None, xray_config: None,
     }
 }
 

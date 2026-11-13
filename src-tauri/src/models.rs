@@ -113,6 +113,11 @@ pub struct Profile {
     pub subscription_id: Option<String>,
     #[serde(default)]
     pub amnezia_config: Option<AmneziaConfig>,
+    /// Full Xray config from an Xray-JSON subscription (one config = one
+    /// profile, its own balancer and routing). VeilBox only swaps in its
+    /// inbounds when connecting.
+    #[serde(default)]
+    pub xray_config: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -162,6 +167,11 @@ pub struct ProfileInput {
     pub subscription_id: Option<String>,
     #[serde(default)]
     pub amnezia_config: Option<AmneziaConfig>,
+    /// Full Xray config from an Xray-JSON subscription (one config = one
+    /// profile, its own balancer and routing). VeilBox only swaps in its
+    /// inbounds when connecting.
+    #[serde(default)]
+    pub xray_config: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

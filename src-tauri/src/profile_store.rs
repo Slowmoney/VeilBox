@@ -68,6 +68,8 @@ impl ProfileStore {
             .or_else(|| existing.as_ref().and_then(|profile| profile.source_label.clone()));
         let subscription_id = trim_option(input.subscription_id.clone())
             .or_else(|| existing.as_ref().and_then(|profile| profile.subscription_id.clone()));
+        let xray_config = trim_option(input.xray_config.clone())
+            .or_else(|| existing.as_ref().and_then(|profile| profile.xray_config.clone()));
         let amnezia_config = normalize_amnezia_config(input.amnezia_config)
             .or_else(|| existing.as_ref().and_then(|profile| profile.amnezia_config.clone()));
 
@@ -108,6 +110,7 @@ impl ProfileStore {
             source_label,
             subscription_id,
             amnezia_config,
+            xray_config,
             created_at: now,
             updated_at: now,
         };
@@ -176,6 +179,7 @@ impl ProfileStore {
             source_label: original.source_label,
             subscription_id: original.subscription_id,
             amnezia_config: original.amnezia_config,
+            xray_config: original.xray_config,
         })
         .await
     }
@@ -215,6 +219,14 @@ fn validate_profile_input(input: &ProfileInput) -> AppResult<()> {
 }
 
 fn validate_xray_profile_input(input: &ProfileInput) -> AppResult<()> {
+    if let Some(raw) = input.xray_config.as_deref() {
+        let config: serde_json::Value = serde_json::from_str(raw)
+            .map_err(|_| AppError::validation("Xray config is not valid JSON"))?;
+        if !config["outbounds"].as_array().is_some_and(|items| !items.is_empty()) {
+            return Err(AppError::validation("Xray config has no outbounds"));
+        }
+        return Ok(());
+    }
     if input.server_address.trim().is_empty() {
         return Err(AppError::validation("Server address is required"));
     }

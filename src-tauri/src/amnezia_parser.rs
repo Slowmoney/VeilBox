@@ -97,6 +97,7 @@ pub fn parse_amnezia_config(raw_config: &str, override_name: Option<String>) -> 
         source: Some(ProfileSource::Manual),
         source_label: None,
         subscription_id: None,
+        xray_config: None,
         amnezia_config: Some(AmneziaConfig {
             raw_config: raw_config.to_string(),
             interface_addresses,

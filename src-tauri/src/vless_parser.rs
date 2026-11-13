@@ -142,7 +142,7 @@ pub fn parse_vless_uri(uri: &str) -> AppResult<ProfileInput> {
         source: None,
         source_label: None,
         subscription_id: None,
-        amnezia_config: None,
+        amnezia_config: None, xray_config: None,
     };
 
     validate_imported_profile(&input)?;

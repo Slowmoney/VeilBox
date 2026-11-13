@@ -123,7 +123,7 @@ pub async fn import_subscription_url(url: &str) -> AppResult<ImportedSubscriptio
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
-        .user_agent("VeilBox/0.1")
+        .user_agent(concat!("VeilBox/", env!("CARGO_PKG_VERSION")))
         .build()?;
 
     let source_label = parsed.host_str().map(|host| host.to_string());
@@ -628,6 +628,12 @@ fn parse_xray_subscription_json(raw: &str, source_label: Option<String>) -> Vec<
             }
             continue;
         }
+        // A complete Xray config (Remnawave XRAY_JSON, as Incy/Happ get it):
+        // one profile, run as a whole with its balancer and routing.
+        if let Some(profile) = full_config_profile(&item, source_label.clone()) {
+            profiles.push(profile);
+            continue;
+        }
         let standalone = item.get("proxies").and_then(Value::as_array);
         if let Some(entries) = standalone {
             for entry in entries {
@@ -653,6 +659,24 @@ fn parse_xray_subscription_json(raw: &str, source_label: Option<String>) -> Vec<
         }
     }
     profiles
+}
+
+/// A full Xray config (has routing or inbounds next to its outbounds) as one
+/// profile: name from `remarks`, display/latency fields from its first proxy
+/// outbound, the config itself kept in `xray_config`.
+fn full_config_profile(item: &Value, source_label: Option<String>) -> Option<ProfileInput> {
+    let outbounds = item.get("outbounds")?.as_array()?;
+    if item.get("routing").is_none() && item.get("inbounds").is_none() {
+        return None;
+    }
+    let first = outbounds.iter().find(|outbound| {
+        matches!(outbound.get("protocol").and_then(Value::as_str), Some("vless" | "shadowsocks" | "hysteria"))
+    })?;
+    let mut single = item.clone();
+    single["outbounds"] = serde_json::json!([first]);
+    let mut profile = parse_xray_profile_object(single, source_label)?;
+    profile.xray_config = Some(serde_json::to_string(item).ok()?);
+    Some(profile)
 }
 
 fn parse_xray_profile_object(value: Value, source_label: Option<String>) -> Option<ProfileInput> {
@@ -868,7 +892,7 @@ fn parse_xray_profile_object(value: Value, source_label: Option<String>) -> Opti
         source: Some(ProfileSource::Subscription),
         source_label,
         subscription_id: None,
-        amnezia_config: None,
+        amnezia_config: None, xray_config: None,
     })
 }
 
@@ -914,7 +938,7 @@ fn parse_other_xray_outbound(outbound: &Value, name: String, source_label: Optio
         service_name: None, xhttp_mode: None, transport_header_type: None,
         seed: None, alpn, allow_insecure, remark: None,
         source: Some(ProfileSource::Subscription), source_label, subscription_id: None,
-        amnezia_config: None,
+        amnezia_config: None, xray_config: None,
     })
 }
 
@@ -1084,6 +1108,35 @@ mod proxy_protocol_tests {
         assert_eq!(profiles.len(), 2);
         assert_eq!(profiles[0].protocol, ProxyProtocol::Shadowsocks);
         assert_eq!(profiles[1].protocol, ProxyProtocol::Hysteria2);
+    }
+
+    /// Remnawave XRAY_JSON (what Incy/Happ get): each config is one server
+    /// named by `remarks`, its balancer kept intact.
+    #[test]
+    fn imports_full_xray_configs_as_one_profile_each() {
+        let vless = |host: &str| serde_json::json!({
+            "tag": "proxy", "protocol": "vless",
+            "settings": {"vnext": [{"address": host, "port": 443, "users": [{"id": "11111111-2222-3333-4444-555555555555", "encryption": "none", "flow": "xtls-rprx-vision"}]}]},
+            "streamSettings": {"network": "tcp", "security": "reality",
+                "realitySettings": {"serverName": "portal.example.com", "fingerprint": "chrome", "publicKey": "pk", "shortId": "ab"}}
+        });
+        let config = |name: &str| serde_json::json!({
+            "remarks": name,
+            "inbounds": [{"tag": "socks", "protocol": "socks", "port": 10808, "listen": "127.0.0.1"}],
+            "outbounds": [vless("a.example.com"), vless("b.example.com"), {"tag": "direct", "protocol": "freedom"}],
+            "routing": {"balancers": [{"tag": "AutoBalancer", "selector": ["proxy"]}],
+                        "rules": [{"type": "field", "network": "tcp,udp", "balancerTag": "AutoBalancer"}]},
+            "burstObservatory": {"subjectSelector": ["proxy"]}
+        });
+        let body = serde_json::json!([config("🇳🇱 Нидерланды · VLESS"), config("АВТОВЫБОР")]).to_string();
+        let profiles = parse_subscription_payloads(vec![body], vec![], None).unwrap();
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].name, "🇳🇱 Нидерланды · VLESS");
+        assert_eq!(profiles[1].name, "АВТОВЫБОР");
+        assert_eq!(profiles[0].server_address, "a.example.com");
+        let stored: serde_json::Value = serde_json::from_str(profiles[0].xray_config.as_deref().unwrap()).unwrap();
+        assert_eq!(stored["outbounds"].as_array().unwrap().len(), 3);
+        assert_eq!(stored["routing"]["balancers"][0]["tag"], "AutoBalancer");
     }
 }
 

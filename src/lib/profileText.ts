@@ -10,8 +10,31 @@ const NETWORK_LABEL: Record<string, string> = {
   kcp: 'mKCP',
 };
 
-/** Short protocol line of a profile: "VLESS · Reality", "XHTTP · Reality", "AmneziaWG". */
+const PROXY_PROTOCOLS = new Set(['vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria']);
+
+/** Servers inside a subscription config (its balancer picks among them). */
+export function configServerCount(profile: Profile): { count: number; mixed: boolean } {
+  if (!profile.xrayConfig) return { count: 1, mixed: false };
+  try {
+    const config = JSON.parse(profile.xrayConfig) as { outbounds?: { protocol?: string; streamSettings?: { network?: string } }[] };
+    const proxies = (config.outbounds ?? []).filter((outbound) => PROXY_PROTOCOLS.has(outbound.protocol ?? ''));
+    const kinds = new Set(proxies.map((outbound) => `${outbound.protocol}/${outbound.streamSettings?.network ?? ''}`));
+    return { count: proxies.length, mixed: kinds.size > 1 };
+  } catch {
+    return { count: 1, mixed: false };
+  }
+}
+
+/** Short protocol line of a profile: "VLESS · Reality", "XHTTP · Reality", "AmneziaWG";
+ *  subscription configs add the server count: "VLESS · Reality · ×2", mixed ones "Авто ×8". */
 export function protocolLine(profile: Profile): string {
+  const base = singleProtocolLine(profile);
+  const { count, mixed } = configServerCount(profile);
+  if (!profile.xrayConfig || count <= 1) return base;
+  return mixed ? `Авто ×${count}` : `${base} · ×${count}`;
+}
+
+function singleProtocolLine(profile: Profile): string {
   if (profile.engine === 'amneziawg') {
     return 'AmneziaWG';
   }

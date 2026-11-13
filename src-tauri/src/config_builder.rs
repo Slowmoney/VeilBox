@@ -227,8 +227,21 @@ pub fn build_xray_config(
     socks_port: u16,
     http_port: u16,
 ) -> AppResult<String> {
+    let inbounds = veilbox_inbounds(settings, socks_port, http_port);
+    if let Some(raw) = profile.xray_config.as_deref() {
+        return build_from_full_config(raw, settings, inbounds);
+    }
     let tun_mode = matches!(settings.connection_mode, ConnectionMode::Tun);
 
+    let outbound_sockopt = outbound_sockopt(settings);
+    let proxy_outbound = build_proxy_outbound(profile, outbound_sockopt.clone())?;
+    build_single_profile_config(profile, settings, tun_mode, inbounds, outbound_sockopt, proxy_outbound)
+}
+
+/// VeilBox's own inbounds: local SOCKS/HTTP proxy, plus the TUN inbound in
+/// TUN mode. Shared by single-profile and full (subscription) configs.
+fn veilbox_inbounds(settings: &Settings, socks_port: u16, http_port: u16) -> Vec<Inbound> {
+    let tun_mode = matches!(settings.connection_mode, ConnectionMode::Tun);
     let mut inbounds = vec![
         Inbound {
             tag: "socks-in".to_string(),
@@ -266,10 +279,49 @@ pub fn build_xray_config(
             sniffing: Some(default_sniffing(true)),
         });
     }
+    inbounds
+}
 
-    let outbound_sockopt = outbound_sockopt(settings);
-    let proxy_outbound = build_proxy_outbound(profile, outbound_sockopt.clone())?;
+/// A config from an Xray-JSON subscription, run as delivered (its outbounds,
+/// balancer, observatory, routing and DNS), with VeilBox's inbounds instead of
+/// the subscription's fixed ones (10808/10809). In TUN mode every outbound is
+/// bound to the physical interface so tunnel traffic cannot loop into TUN.
+fn build_from_full_config(raw: &str, settings: &Settings, inbounds: Vec<Inbound>) -> AppResult<String> {
+    let mut config: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|error| AppError::validation(format!("Invalid Xray config in profile: {error}")))?;
+    let object = config
+        .as_object_mut()
+        .ok_or_else(|| AppError::validation("Xray config in profile is not an object"))?;
+    object.remove("remarks");
+    object.insert("inbounds".to_string(), serde_json::to_value(inbounds)?);
+    object.insert("log".to_string(), serde_json::json!({ "loglevel": "warning" }));
 
+    if let Some(sockopt) = outbound_sockopt(settings) {
+        let sockopt = serde_json::to_value(sockopt)?;
+        if let Some(outbounds) = object.get_mut("outbounds").and_then(serde_json::Value::as_array_mut) {
+            for outbound in outbounds {
+                if outbound["protocol"] == "blackhole" {
+                    continue;
+                }
+                let stream = &mut outbound["streamSettings"];
+                if !stream.is_object() {
+                    *stream = serde_json::json!({});
+                }
+                stream["sockopt"] = sockopt.clone();
+            }
+        }
+    }
+    Ok(serde_json::to_string_pretty(&config)?)
+}
+
+fn build_single_profile_config(
+    profile: &Profile,
+    settings: &Settings,
+    tun_mode: bool,
+    inbounds: Vec<Inbound>,
+    outbound_sockopt: Option<SockoptSettings>,
+    proxy_outbound: Outbound,
+) -> AppResult<String> {
     let outbounds = vec![
         proxy_outbound,
         Outbound {
@@ -457,10 +509,15 @@ pub fn build_balanced_xray_config(
     probe_port: u16,
     api_port: u16,
 ) -> AppResult<String> {
+    // A subscription config already balances its own servers.
+    if primary.xray_config.is_some() {
+        return build_xray_config(primary, settings, socks_port, http_port);
+    }
     let mut config: serde_json::Value = serde_json::from_str(&build_xray_config(primary, settings, socks_port, http_port)?)?;
     let mut count = 0usize;
     for candidate in std::iter::once(primary).chain(candidates.iter().filter(|p| p.id != primary.id)) {
         if !matches!(candidate.engine, crate::models::ProfileEngine::Xray) { continue; }
+        if candidate.xray_config.is_some() { continue; }
         // Reuse exactly the same outbound validation as a normal profile connection.
         let other_config = match build_xray_config(candidate, settings, socks_port, http_port) {
             Ok(config) => config,
@@ -871,6 +928,60 @@ mod tests {
     use super::*;
     use crate::models::{ProfileEngine, ProfileSource};
 
+    /// Subscription (XRAY_JSON) configs run as delivered; only the inbounds are
+    /// VeilBox's, and in TUN mode outbounds are bound to the physical interface.
+    #[test]
+    fn full_subscription_config_keeps_balancer_and_swaps_inbounds() {
+        let now = chrono::Utc::now();
+        let raw = serde_json::json!({
+            "remarks": "🇳🇱 Нидерланды · VLESS",
+            "inbounds": [{"tag": "socks", "protocol": "socks", "port": 10808, "listen": "127.0.0.1"}],
+            "outbounds": [
+                {"tag": "proxy", "protocol": "vless", "settings": {}},
+                {"tag": "proxy-2", "protocol": "vless", "settings": {}, "streamSettings": {"network": "tcp"}},
+                {"tag": "block", "protocol": "blackhole"}
+            ],
+            "routing": {"balancers": [{"tag": "AutoBalancer", "selector": ["proxy"]}]}
+        }).to_string();
+        let profile = Profile {
+            id: "full".into(), name: "🇳🇱 Нидерланды · VLESS".into(), engine: ProfileEngine::Xray,
+            protocol: ProxyProtocol::Vless, password: None, method: None, obfs_password: None,
+            server_address: "a.example.com".into(), port: 443,
+            uuid: "11111111-1111-4111-8111-111111111111".into(),
+            network_type: NetworkType::Tcp, security_type: SecurityType::Reality,
+            flow: None, sni: None, fingerprint: None, public_key: None, short_id: None, spider_x: None,
+            path: None, host_header: None, service_name: None, xhttp_mode: None,
+            transport_header_type: None, seed: None, alpn: vec![], allow_insecure: false, remark: None,
+            source: ProfileSource::Subscription, source_label: None, subscription_id: None,
+            amnezia_config: None, xray_config: Some(raw), created_at: now, updated_at: now,
+        };
+
+        let proxy: serde_json::Value =
+            serde_json::from_str(&build_xray_config(&profile, &Settings::default(), 19350, 19351).unwrap()).unwrap();
+        assert!(proxy.get("remarks").is_none());
+        assert_eq!(proxy["inbounds"][0]["port"], 19350);
+        assert_eq!(proxy["inbounds"][1]["port"], 19351);
+        assert!(!proxy["inbounds"].as_array().unwrap().iter().any(|inbound| inbound["port"] == 10808));
+        assert_eq!(proxy["routing"]["balancers"][0]["tag"], "AutoBalancer");
+        assert_eq!(proxy["outbounds"].as_array().unwrap().len(), 3);
+        // VeilBox's own balancing never merges a subscription config.
+        let balanced: serde_json::Value = serde_json::from_str(
+            &build_balanced_xray_config(&profile, &[], &Settings::default(), 19350, 19351, 19352, 19353).unwrap(),
+        ).unwrap();
+        assert_eq!(balanced, proxy);
+
+        let mut tun = Settings::default();
+        tun.connection_mode = ConnectionMode::Tun;
+        tun.tun_outbound_interface = Some("Ethernet".into());
+        let tun_config: serde_json::Value =
+            serde_json::from_str(&build_xray_config(&profile, &tun, 19350, 19351).unwrap()).unwrap();
+        assert_eq!(tun_config["inbounds"][2]["protocol"], "tun");
+        assert_eq!(tun_config["outbounds"][0]["streamSettings"]["sockopt"]["interface"], "Ethernet");
+        assert_eq!(tun_config["outbounds"][1]["streamSettings"]["network"], "tcp");
+        assert_eq!(tun_config["outbounds"][1]["streamSettings"]["sockopt"]["interface"], "Ethernet");
+        assert!(tun_config["outbounds"][2]["streamSettings"].is_null());
+    }
+
     #[test]
     fn tun_geo_and_process_rules_are_accepted_by_bundled_xray() {
         let now = chrono::Utc::now();
@@ -885,7 +996,7 @@ mod tests {
             host_header: None, service_name: None, xhttp_mode: None,
             transport_header_type: None, seed: None, alpn: vec![],
             allow_insecure: false, remark: None, source: ProfileSource::Manual,
-            source_label: None, subscription_id: None, amnezia_config: None,
+            source_label: None, subscription_id: None, amnezia_config: None, xray_config: None,
             created_at: now, updated_at: now,
         };
         let mut settings = Settings::default();

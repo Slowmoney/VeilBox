@@ -1,6 +1,6 @@
 [package]
 name = "vailbox"
-version = "2.2.0"
+version = "2.3.0"
 description = "VLESS / AmneziaWG desktop client built with Tauri (Windows, macOS)"
 authors = ["Codex"]
 edition = "2021"

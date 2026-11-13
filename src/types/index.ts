@@ -62,6 +62,8 @@ export interface Profile {
   sourceLabel: string | null;
   subscriptionId: string | null;
   amneziaConfig: AmneziaConfig | null;
+  /** Full Xray config from an Xray-JSON subscription (own balancer). */
+  xrayConfig?: string | null;
   createdAt: string;
   updatedAt: string;
 }
